@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7f5f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1a19" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="コマ割り">
+<meta name="description" content="1枚漫画をコマごとに切り出して、スレッズのスライド投稿用にまとめてダウンロードできるツール。">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon.png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>コマ割りカッター</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#f7f5f1; --panel:#ffffff; --ink:#2f2b28; --sub:#7b736c;
+    --line:#e3ddd5; --accent:#e58b6f; --accent-ink:#fff; --sel:#5aa9a3;
+    --shadow:0 1px 3px rgba(60,50,40,.08),0 6px 18px rgba(60,50,40,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#1c1a19; --panel:#262321; --ink:#efe9e2; --sub:#a59b92;
+      --line:#3a3532; --accent:#e58b6f; --sel:#6fc3bc;
+      --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#1c1a19; --panel:#262321; --ink:#efe9e2; --sub:#a59b92;
+    --line:#3a3532; --accent:#e58b6f; --sel:#6fc3bc;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Hiragino Maru Gothic ProN","Hiragino Sans",-apple-system,"Segoe UI","Yu Gothic UI",sans-serif;
+    font-size:14px; line-height:1.6;
+  }
+  header{padding:18px 16px 8px; max-width:1180px; margin:0 auto}
+  h1{font-size:20px; margin:0 0 2px}
+  .lead{color:var(--sub); font-size:13px; margin:0}
+  main{max-width:1180px; margin:0 auto; padding:12px 16px 60px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; box-shadow:var(--shadow); margin-bottom:14px}
+  .row{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
+  .col-main{flex:1 1 520px; min-width:280px}
+  .col-side{flex:0 1 300px; min-width:250px}
+  #drop{
+    border:2px dashed var(--line); border-radius:14px; padding:34px 16px; text-align:center;
+    color:var(--sub); cursor:pointer; background:var(--panel); transition:.15s;
+  }
+  #drop.hot{border-color:var(--accent); color:var(--ink); background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
+  #stage{position:relative; width:100%}
+  #view{width:100%; display:block; border-radius:10px; background:#fff}
+  #overlay{position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; touch-action:manipulation}
+  #overlay.editing{touch-action:none}
+  label.f{display:block; margin:10px 0 2px; font-size:12px; color:var(--sub)}
+  input[type=range]{width:100%; accent-color:var(--accent)}
+  select,input[type=number],input[type=text]{
+    width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:9px;
+    background:var(--panel); color:var(--ink); font:inherit; font-size:13px;
+  }
+  .btn{
+    appearance:none; border:1px solid var(--line); background:var(--panel); color:var(--ink);
+    padding:9px 14px; border-radius:999px; font:inherit; font-size:13px; cursor:pointer; transition:.12s;
+  }
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:700}
+  .btn.primary:hover{filter:brightness(1.05)}
+  .btn:disabled{opacity:.45; cursor:not-allowed}
+  .btns{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px}
+  .val{float:right; color:var(--ink); font-variant-numeric:tabular-nums}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:12px; margin-top:12px}
+  .thumb{border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--panel); position:relative}
+  .thumb.off{opacity:.38}
+  .thumb img{width:100%; display:block; background:#fff; cursor:pointer}
+  .thumb .bar{display:flex; align-items:center; gap:6px; padding:6px 8px; font-size:12px; border-top:1px solid var(--line)}
+  .thumb .no{font-weight:700; min-width:22px}
+  .thumb .sz{color:var(--sub); font-size:11px; flex:1; text-align:right}
+  .mini{border:none; background:transparent; cursor:pointer; color:var(--sub); font-size:14px; padding:2px 4px; border-radius:6px}
+  .mini:hover{color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  .hint{font-size:12px; color:var(--sub); margin:8px 0 0}
+  .status{font-size:12px; color:var(--sub); margin-top:8px; min-height:1.4em}
+  h2{font-size:14px; margin:0 0 4px}
+  .chk{display:flex; align-items:center; gap:7px; margin:8px 0; font-size:13px}
+  .chk input{accent-color:var(--accent); width:16px; height:16px}
+  .sep{height:1px; background:var(--line); margin:14px 0}
+  .toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px}
+  .pill{font-size:12px; color:var(--sub); background:color-mix(in srgb,var(--line) 50%,transparent); padding:3px 10px; border-radius:999px}
+  .btn.on{background:var(--sel); border-color:var(--sel); color:#fff; font-weight:700}
+  #actionbar{display:none}
+  @media (max-width:760px){
+    header{padding:14px 16px 4px}
+    h1{font-size:18px}
+    main{padding:8px 16px 96px}
+    .col-side{flex:1 1 100%}
+    .card{padding:12px; border-radius:12px}
+    .btn{padding:11px 16px; font-size:14px}
+    .grid{grid-template-columns:repeat(auto-fill,minmax(116px,1fr)); gap:10px}
+    .mini{font-size:18px; padding:6px 10px}
+    .thumb .bar{padding:8px; gap:8px}
+    .thumb input[type=checkbox]{width:20px; height:20px}
+    .thumb .sz{display:none}
+    select,input[type=number],input[type=text]{padding:10px; font-size:16px}
+    .hint{font-size:12px}
+    #actionbar{
+      display:flex; gap:8px; position:fixed; left:0; right:0; bottom:0; z-index:20;
+      padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+      background:color-mix(in srgb,var(--panel) 92%,transparent);
+      backdrop-filter:blur(8px); border-top:1px solid var(--line);
+    }
+    #actionbar .btn{flex:1; text-align:center}
+  }
+  @media (min-width:761px){ #btnEdit{display:none} }
+</style>
+</head>
+<body>
+<header>
+  <h1>コマ割りカッター</h1>
+  <p class="lead">1枚漫画をコマごとに自動で切り出して、選んだコマだけまとめてダウンロード。スレッズのスライド投稿用。</p>
+</header>
+
+<main>
+  <div id="drop" class="card">
+    画像をここにドロップ / クリックして選択 / Ctrl+V で貼り付け<br>
+    <span style="font-size:12px">PNG・JPG・WebP に対応。画像はこの中だけで処理されます（どこにも送信しません）</span>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+
+  <div class="row" id="workspace" hidden>
+    <div class="col-main">
+      <div class="card">
+        <div class="toolbar">
+          <span class="pill" id="imgInfo"></span>
+          <span class="pill" id="countInfo"></span>
+          <button class="btn" id="btnAllOn">全部えらぶ</button>
+          <button class="btn" id="btnAllOff">全部はずす</button>
+          <button class="btn" id="btnEdit">枠をなおす</button>
+        </div>
+        <div id="stage">
+          <canvas id="view"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　何もない所をドラッグ＝コマを足す　・　枠の中をドラッグ＝移動　・　角をドラッグ＝サイズ変更</p>
+        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。枠の位置を直したいときは「枠をなおす」をオンに。</p>
+      </div>
+
+      <div class="card">
+        <h2>切り出したコマ</h2>
+        <div class="grid" id="grid"></div>
+      </div>
+    </div>
+
+    <div class="col-side">
+      <div class="card">
+        <h2>じどう検出</h2>
+        <label class="f">コマの間の白さ<span class="val" id="vThr"></span></label>
+        <input type="range" id="thr" min="180" max="253" value="238">
+        <label class="f">すきまの細さ（%）<span class="val" id="vGap"></span></label>
+        <input type="range" id="gap" min="2" max="40" value="8">
+        <label class="f">小さすぎるコマを無視（%）<span class="val" id="vMin"></span></label>
+        <input type="range" id="minsz" min="2" max="30" value="7">
+        <label class="f">読む順番</label>
+        <select id="order">
+          <option value="ltr">左 → 右（横書きふう）</option>
+          <option value="rtl">右 → 左（日本の漫画）</option>
+        </select>
+        <div class="btns">
+          <button class="btn primary" id="btnDetect">もう一度 検出</button>
+        </div>
+        <div class="status" id="status"></div>
+      </div>
+
+      <div class="card">
+        <h2>書き出し</h2>
+        <label class="f">かたち</label>
+        <select id="aspect">
+          <option value="raw">コマそのまま</option>
+          <option value="1:1">正方形 1:1</option>
+          <option value="4:5" selected>たて長 4:5（スレッズ推奨）</option>
+          <option value="3:4">たて長 3:4</option>
+          <option value="9:16">ストーリーズ 9:16</option>
+        </select>
+        <label class="f">よはくの色</label>
+        <select id="bg">
+          <option value="#ffffff" selected>白</option>
+          <option value="auto">自動（コマのふちの色）</option>
+          <option value="#f7f5f1">生成り</option>
+          <option value="#000000">黒</option>
+        </select>
+        <label class="f">よはくの広さ（%）<span class="val" id="vPad"></span></label>
+        <input type="range" id="pad" min="0" max="20" value="5">
+        <label class="f">長いほうの辺（px）</label>
+        <input type="number" id="maxside" value="1440" min="400" max="4096" step="20">
+        <div class="chk"><input type="checkbox" id="jpg"><label for="jpg">JPEG で書き出す（軽い）</label></div>
+        <label class="f">ファイル名のあたま</label>
+        <input type="text" id="prefix" value="panel">
+        <div class="btns">
+          <button class="btn primary" id="btnZip">選んだコマをZIPでDL</button>
+          <button class="btn" id="btnShare" hidden>スマホで共有・保存</button>
+        </div>
+        <div class="sep"></div>
+        <p class="hint">スレッズのスライドは1投稿20枚まで。並び順は番号のとおりです。</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="actionbar" hidden>
+    <button class="btn" id="barEdit">枠をなおす</button>
+    <button class="btn primary" id="barGo">選んだコマを保存</button>
+  </div>
+</main>
+
+<script>
+(() => {
+"use strict";
+
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileInput = $('file'), ws = $('workspace');
+const view = $('view'), overlay = $('overlay');
+const vctx = view.getContext('2d'), octx = overlay.getContext('2d');
+
+let img = null;            // source ImageBitmap/Image
+let src = null;            // offscreen canvas with full-res image
+let panels = [];           // {x,y,w,h,on}
+let scale = 1;             // display scale
+let baseName = 'manga';
+
+/* ---------- 読み込み ---------- */
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+['dragenter','dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('hot'); }));
+['dragleave','drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('hot'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+window.addEventListener('paste', e => {
+  for (const it of e.clipboardData.files) { if (it.type.startsWith('image/')) { loadFile(it); break; } }
+});
+
+function loadFile(file){
+  baseName = (file.name || 'manga').replace(/\.[^.]+$/, '') || 'manga';
+  const url = URL.createObjectURL(file);
+  loadURL(url, () => URL.revokeObjectURL(url));
+}
+
+function loadURL(url, done){
+  const im = new Image();
+  im.crossOrigin = 'anonymous';
+  im.onload = () => {
+    img = im;
+    src = document.createElement('canvas');
+    src.width = im.naturalWidth; src.height = im.naturalHeight;
+    src.getContext('2d', {willReadFrequently:true}).drawImage(im, 0, 0);
+    ws.hidden = false;
+    $('actionbar').hidden = false;
+    if (coarse){ $('hintPC').hidden = true; $('hintSP').hidden = false; }
+    $('imgInfo').textContent = `${src.width} × ${src.height}px`;
+    detect();
+    if (done) done();
+  };
+  im.onerror = () => { $('status').textContent = '画像を読み込めませんでした。'; if (done) done(); };
+  im.src = url;
+}
+
+/* ---------- 検出（再帰XYカット） ---------- */
+let mask = null, iw = 0, ih = 0, integ = null;
+
+function buildMask(threshold){
+  iw = src.width; ih = src.height;
+  const d = src.getContext('2d', {willReadFrequently:true}).getImageData(0,0,iw,ih).data;
+  mask = new Uint8Array(iw*ih);
+  for (let i = 0, p = 0; i < mask.length; i++, p += 4){
+    const a = d[p+3];
+    // 透過は「すきま」あつかい
+    const lum = a < 24 ? 255 : (0.299*d[p] + 0.587*d[p+1] + 0.114*d[p+2]);
+    mask[i] = lum < threshold ? 1 : 0;
+  }
+  // 積分画像（(iw+1)*(ih+1)）
+  integ = new Int32Array((iw+1)*(ih+1));
+  for (let y = 0; y < ih; y++){
+    let rowsum = 0;
+    const o = y*iw, o1 = (y+1)*(iw+1), o0 = y*(iw+1);
+    for (let x = 0; x < iw; x++){
+      rowsum += mask[o+x];
+      integ[o1 + x + 1] = integ[o0 + x + 1] + rowsum;
+    }
+  }
+}
+const inkCount = (x0,y0,x1,y1) => {   // [x0,x1) [y0,y1)
+  const W = iw+1;
+  return integ[y1*W+x1] - integ[y0*W+x1] - integ[y1*W+x0] + integ[y0*W+x0];
+};
+
+function trim(r){
+  let {x0,y0,x1,y1} = r;
+  while (y0 < y1 && inkCount(x0,y0,x1,y0+1) === 0) y0++;
+  while (y1 > y0 && inkCount(x0,y1-1,x1,y1) === 0) y1--;
+  while (x0 < x1 && inkCount(x0,y0,x0+1,y1) === 0) x0++;
+  while (x1 > x0 && inkCount(x1-1,y0,x1,y1) === 0) x1--;
+  return {x0,y0,x1,y1};
+}
+
+// 領域内の「ほぼ空白」の連続を探して分割位置を返す
+function cuts(r, axis, minGap, minSize){
+  const {x0,y0,x1,y1} = r;
+  const len = axis === 'y' ? (y1-y0) : (x1-x0);
+  const span = axis === 'y' ? (x1-x0) : (y1-y0);
+  const tol = Math.max(0, Math.floor(span * 0.004));
+  const blank = new Uint8Array(len);
+  for (let i = 0; i < len; i++){
+    const c = axis === 'y'
+      ? inkCount(x0, y0+i, x1, y0+i+1)
+      : inkCount(x0+i, y0, x0+i+1, y1);
+    blank[i] = c <= tol ? 1 : 0;
+  }
+  const segs = [];
+  let start = 0, i = 0;
+  while (i < len){
+    if (!blank[i]) { i++; continue; }
+    let j = i; while (j < len && blank[j]) j++;
+    if (j - i >= minGap){
+      if (i - start >= minSize) segs.push([start, i]);
+      start = j;
+    }
+    i = j;
+  }
+  if (len - start >= minSize) segs.push([start, len]);
+  return segs;
+}
+
+function split(r, minGap, minSize, out, depth){
+  r = trim(r);
+  const w = r.x1-r.x0, h = r.y1-r.y0;
+  if (w < minSize || h < minSize) return;
+  if (depth > 12){ out.push(r); return; }
+
+  const rows = cuts(r, 'y', minGap, minSize);
+  if (rows.length > 1){
+    for (const [a,b] of rows) split({x0:r.x0, y0:r.y0+a, x1:r.x1, y1:r.y0+b}, minGap, minSize, out, depth+1);
+    return;
+  }
+  const cols = cuts(r, 'x', minGap, minSize);
+  if (cols.length > 1){
+    const list = cols.map(([a,b]) => ({x0:r.x0+a, y0:r.y0, x1:r.x0+b, y1:r.y1}));
+    if ($('order').value === 'rtl') list.reverse();
+    for (const c of list) split(c, minGap, minSize, out, depth+1);
+    return;
+  }
+  out.push(r);
+}
+
+function detect(){
+  if (!src) return;
+  const t0 = performance.now();
+  const thr = +$('thr').value;
+  const short = Math.min(src.width, src.height);
+  const minGap = Math.max(2, Math.round(short * (+$('gap').value) / 1000));
+  const minSize = Math.max(8, Math.round(short * (+$('minsz').value) / 100));
+
+  buildMask(thr);
+  const out = [];
+  split({x0:0, y0:0, x1:iw, y1:ih}, minGap, minSize, out, 0);
+
+  const prevOn = new Map(panels.map(p => [p.x+','+p.y, p.on]));
+  panels = out.map(r => ({
+    x:r.x0, y:r.y0, w:r.x1-r.x0, h:r.y1-r.y0,
+    on: prevOn.has(r.x0+','+r.y0) ? prevOn.get(r.x0+','+r.y0) : true
+  }));
+  $('status').textContent = `${panels.length}コマ検出（${Math.round(performance.now()-t0)}ms）`;
+  render(); buildThumbs();
+}
+
+/* ---------- 表示 ---------- */
+function render(){
+  const cssW = view.parentElement.clientWidth || 600;
+  scale = cssW / src.width;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  for (const c of [view, overlay]){
+    c.style.width = cssW + 'px';
+    c.style.height = (src.height * scale) + 'px';
+    c.width = Math.round(cssW * dpr);
+    c.height = Math.round(src.height * scale * dpr);
+  }
+  vctx.setTransform(dpr,0,0,dpr,0,0);
+  vctx.clearRect(0,0,cssW,src.height*scale);
+  vctx.drawImage(src, 0, 0, cssW, src.height*scale);
+  octx.setTransform(dpr,0,0,dpr,0,0);
+  drawBoxes();
+  $('countInfo').textContent = `${panels.filter(p=>p.on).length} / ${panels.length} コマを選択中`;
+}
+
+function drawBoxes(){
+  const W = overlay.clientWidth, H = overlay.clientHeight;
+  octx.clearRect(0,0,W,H);
+  panels.forEach((p, i) => {
+    const x = p.x*scale, y = p.y*scale, w = p.w*scale, h = p.h*scale;
+    const on = p.on;
+    octx.lineWidth = on ? 3 : 2;
+    octx.strokeStyle = on ? '#5aa9a3' : 'rgba(120,120,120,.75)';
+    octx.setLineDash(on ? [] : [6,5]);
+    octx.strokeRect(x+1, y+1, w-2, h-2);
+    octx.setLineDash([]);
+    if (on){ octx.fillStyle = 'rgba(90,169,163,.10)'; octx.fillRect(x,y,w,h); }
+    // 番号バッジ
+    const r = 13;
+    octx.fillStyle = on ? '#5aa9a3' : 'rgba(120,120,120,.85)';
+    octx.beginPath(); octx.arc(x+r+4, y+r+4, r, 0, Math.PI*2); octx.fill();
+    octx.fillStyle = '#fff'; octx.font = 'bold 14px system-ui'; octx.textAlign='center'; octx.textBaseline='middle';
+    octx.fillText(String(i+1), x+r+4, y+r+5);
+  });
+  if (dragBox){
+    octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2; octx.setLineDash([5,4]);
+    octx.strokeRect(dragBox.x, dragBox.y, dragBox.w, dragBox.h); octx.setLineDash([]);
+  }
+}
+
+window.addEventListener('resize', () => { if (src) render(); });
+
+/* ---------- マウス操作 ---------- */
+let mode = null, active = -1, startPt = null, dragBox = null, orig = null, corner = null;
+let editMode = false;
+const coarse = matchMedia('(pointer: coarse)').matches;
+const HANDLE = coarse ? 24 : 14;
+
+function setEdit(on){
+  editMode = on;
+  overlay.classList.toggle('editing', on);
+  $('btnEdit').classList.toggle('on', on);
+  $('barEdit').classList.toggle('on', on);
+}
+$('btnEdit').addEventListener('click', () => setEdit(!editMode));
+$('barEdit').addEventListener('click', () => setEdit(!editMode));
+
+function pt(e){
+  const r = overlay.getBoundingClientRect();
+  return {x: e.clientX - r.left, y: e.clientY - r.top};
+}
+function hit(p){
+  for (let i = panels.length-1; i >= 0; i--){
+    const b = panels[i];
+    const x = b.x*scale, y = b.y*scale, w = b.w*scale, h = b.h*scale;
+    if (p.x >= x && p.x <= x+w && p.y >= y && p.y <= y+h) return i;
+  }
+  return -1;
+}
+function cornerAt(i, p){
+  const b = panels[i];
+  const cs = [['nw',b.x,b.y],['ne',b.x+b.w,b.y],['sw',b.x,b.y+b.h],['se',b.x+b.w,b.y+b.h]];
+  for (const [name,cx,cy] of cs){
+    if (Math.abs(p.x-cx*scale) < HANDLE && Math.abs(p.y-cy*scale) < HANDLE) return name;
+  }
+  return null;
+}
+
+overlay.addEventListener('pointerdown', e => {
+  const p = pt(e);
+  // 指で「えらぶ」モードのときは、タップだけ拾ってスクロールは邪魔しない
+  if (e.pointerType !== 'mouse' && !editMode){
+    mode = 'tap'; startPt = p; active = hit(p);
+    return;
+  }
+  overlay.setPointerCapture(e.pointerId);
+  startPt = p; active = hit(p);
+  if (active >= 0){
+    corner = cornerAt(active, p);
+    mode = corner ? 'resize' : 'maybe-move';
+    orig = {...panels[active]};
+  } else {
+    mode = 'new'; dragBox = {x:p.x, y:p.y, w:0, h:0};
+  }
+});
+overlay.addEventListener('pointermove', e => {
+  const p = pt(e);
+  if (mode === 'tap'){
+    if (Math.hypot(p.x-startPt.x, p.y-startPt.y) > 12) { mode = null; active = -1; }  // スクロール扱い
+    return;
+  }
+  if (!mode){
+    const i = hit(p);
+    overlay.style.cursor = i < 0 ? 'crosshair' : (cornerAt(i,p) ? 'nwse-resize' : 'move');
+    return;
+  }
+  const dx = (p.x - startPt.x)/scale, dy = (p.y - startPt.y)/scale;
+  if (mode === 'maybe-move' && Math.hypot(p.x-startPt.x, p.y-startPt.y) > 4) mode = 'move';
+  if (mode === 'move'){
+    const b = panels[active];
+    b.x = clamp(orig.x + dx, 0, src.width - b.w);
+    b.y = clamp(orig.y + dy, 0, src.height - b.h);
+    drawBoxes();
+  } else if (mode === 'resize'){
+    const b = panels[active];
+    let x0 = orig.x, y0 = orig.y, x1 = orig.x+orig.w, y1 = orig.y+orig.h;
+    if (corner.includes('w')) x0 = orig.x + dx; else x1 = orig.x+orig.w + dx;
+    if (corner.includes('n')) y0 = orig.y + dy; else y1 = orig.y+orig.h + dy;
+    b.x = clamp(Math.min(x0,x1), 0, src.width); b.y = clamp(Math.min(y0,y1), 0, src.height);
+    b.w = clamp(Math.abs(x1-x0), 8, src.width-b.x); b.h = clamp(Math.abs(y1-y0), 8, src.height-b.y);
+    drawBoxes();
+  } else if (mode === 'new'){
+    dragBox = {x:Math.min(startPt.x,p.x), y:Math.min(startPt.y,p.y), w:Math.abs(p.x-startPt.x), h:Math.abs(p.y-startPt.y)};
+    drawBoxes();
+  }
+});
+overlay.addEventListener('pointercancel', () => { mode = null; dragBox = null; active = -1; corner = null; drawBoxes(); });
+overlay.addEventListener('pointerup', () => {
+  if (mode === 'tap'){
+    if (active >= 0) panels[active].on = !panels[active].on;
+    mode = null; active = -1;
+    render(); buildThumbs(); return;
+  }
+  if (mode === 'maybe-move' && active >= 0){
+    panels[active].on = !panels[active].on;            // クリック＝選択トグル
+  } else if (mode === 'new' && dragBox && dragBox.w > 12 && dragBox.h > 12){
+    panels.push({x:dragBox.x/scale, y:dragBox.y/scale, w:dragBox.w/scale, h:dragBox.h/scale, on:true});
+    sortPanels();
+  }
+  mode = null; dragBox = null; active = -1; corner = null;
+  render(); buildThumbs();
+});
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+function sortPanels(){
+  const rtl = $('order').value === 'rtl';
+  const band = src.height * 0.04;
+  panels.sort((a,b) => {
+    if (Math.abs(a.y - b.y) > band) return a.y - b.y;
+    return rtl ? (b.x - a.x) : (a.x - b.x);
+  });
+}
+
+/* ---------- 書き出し ---------- */
+function edgeColor(p){
+  const s = 8;
+  const t = document.createElement('canvas'); t.width = s; t.height = s;
+  t.getContext('2d').drawImage(src, p.x, p.y, p.w, p.h, 0, 0, s, s);
+  const d = t.getContext('2d').getImageData(0,0,s,s).data;
+  let r=0,gg=0,b=0,n=0;
+  for (let y=0;y<s;y++) for (let x=0;x<s;x++){
+    if (x!==0 && y!==0 && x!==s-1 && y!==s-1) continue;
+    const i=(y*s+x)*4; r+=d[i]; gg+=d[i+1]; b+=d[i+2]; n++;
+  }
+  return `rgb(${Math.round(r/n)},${Math.round(gg/n)},${Math.round(b/n)})`;
+}
+
+function renderPanel(p){
+  const aspect = $('aspect').value;
+  const padPct = (+$('pad').value)/100;
+  const maxSide = clamp(+$('maxside').value || 1440, 200, 4096);
+  const bgSel = $('bg').value;
+  const bg = bgSel === 'auto' ? edgeColor(p) : bgSel;
+
+  const pw = Math.round(p.w), ph = Math.round(p.h);
+  let cw, ch;
+  if (aspect === 'raw'){
+    const padX = Math.round(pw * padPct), padY = Math.round(ph * padPct);
+    cw = pw + padX*2; ch = ph + padY*2;
+  } else {
+    const [aw, ah] = aspect.split(':').map(Number);
+    // 余白込みでコマが収まる最小サイズ
+    const innerW = pw / (1 - padPct*2), innerH = ph / (1 - padPct*2);
+    if (innerW/innerH > aw/ah){ cw = innerW; ch = innerW * ah/aw; }
+    else { ch = innerH; cw = innerH * aw/ah; }
+  }
+  let k = 1;
+  const long = Math.max(cw, ch);
+  if (long > maxSide) k = maxSide / long;
+  const W = Math.max(1, Math.round(cw*k)), H = Math.max(1, Math.round(ch*k));
+
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.fillStyle = bg; g.fillRect(0,0,W,H);
+  const dw = Math.round(pw * k), dh = Math.round(ph * k);
+  g.drawImage(src, Math.round(p.x), Math.round(p.y), pw, ph,
+              Math.round((W-dw)/2), Math.round((H-dh)/2), dw, dh);
+  return c;
+}
+
+function fileExt(){ return $('jpg').checked ? 'jpg' : 'png'; }
+function mime(){ return $('jpg').checked ? 'image/jpeg' : 'image/png'; }
+const pad2 = n => String(n).padStart(2,'0');
+function nameOf(i){ return `${$('prefix').value || 'panel'}_${pad2(i+1)}.${fileExt()}`; }
+
+function buildThumbs(){
+  const grid = $('grid'); grid.innerHTML = '';
+  panels.forEach((p, i) => {
+    const c = renderPanel(p);
+    const el = document.createElement('div');
+    el.className = 'thumb' + (p.on ? '' : ' off');
+    el.innerHTML = `
+      <img src="${c.toDataURL('image/png')}" alt="コマ${i+1}">
+      <div class="bar">
+        <input type="checkbox" ${p.on?'checked':''} aria-label="コマ${i+1}を選ぶ">
+        <span class="no">${i+1}</span>
+        <button class="mini dl" title="このコマだけDL">⬇</button>
+        <button class="mini del" title="この枠を消す">✕</button>
+        <span class="sz">${c.width}×${c.height}</span>
+      </div>`;
+    el.querySelector('input').addEventListener('change', e => { p.on = e.target.checked; el.classList.toggle('off', !p.on); render(); });
+    el.querySelector('img').addEventListener('click', () => { p.on = !p.on; render(); buildThumbs(); });
+    el.querySelector('.dl').addEventListener('click', () => {
+      renderPanel(p).toBlob(b => saveBlob(b, nameOf(i)), mime(), 0.92);
+    });
+    el.querySelector('.del').addEventListener('click', () => { panels.splice(i,1); render(); buildThumbs(); });
+    grid.appendChild(el);
+  });
+}
+
+function saveBlob(blob, name){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+$('btnZip').addEventListener('click', async () => {
+  const chosen = panels.filter(p => p.on);
+  if (!chosen.length){ $('status').textContent = 'コマが選ばれていません。'; return; }
+  const btn = $('btnZip'); btn.disabled = true; btn.textContent = '作成中…';
+  try{
+    const zip = new JSZip();
+    for (let i = 0; i < chosen.length; i++){
+      const blob = await new Promise(res => renderPanel(chosen[i]).toBlob(res, mime(), 0.92));
+      zip.file(nameOf(i), blob);
+    }
+    const out = await zip.generateAsync({type:'blob'});
+    saveBlob(out, `${baseName}_panels.zip`);
+    $('status').textContent = `${chosen.length}コマをZIPにしました。`;
+  } catch(err){
+    $('status').textContent = 'ZIP作成に失敗: ' + err.message;
+  } finally { btn.disabled = false; btn.textContent = '選んだコマをZIPでDL'; }
+});
+
+/* ---------- スマホ共有（Web Share API） ---------- */
+async function panelFiles(){
+  const chosen = panels.filter(p => p.on);
+  const files = [];
+  for (let i = 0; i < chosen.length; i++){
+    const blob = await new Promise(res => renderPanel(chosen[i]).toBlob(res, mime(), 0.92));
+    files.push(new File([blob], nameOf(i), {type: mime()}));
+  }
+  return files;
+}
+const canShareFiles = () => {
+  if (!navigator.canShare) return false;
+  try { return navigator.canShare({files:[new File([new Blob([1])], 'a.png', {type:'image/png'})]}); }
+  catch { return false; }
+};
+async function shareSelected(){
+  if (!panels.some(p => p.on)){ $('status').textContent = 'コマが選ばれていません。'; return; }
+  const btn = $('btnShare'); btn.disabled = true; btn.textContent = '準備中…';
+  try{
+    const files = await panelFiles();
+    if (navigator.canShare({files})) await navigator.share({files, title: baseName});
+    else { $('status').textContent = 'この端末ではまとめて共有できません。ZIPをお使いください。'; }
+  } catch(err){
+    if (err.name !== 'AbortError') $('status').textContent = '共有できませんでした: ' + err.message;
+  } finally { btn.disabled = false; btn.textContent = 'スマホで共有・保存'; }
+}
+if (canShareFiles()){
+  $('btnShare').hidden = false;
+  $('btnShare').addEventListener('click', shareSelected);
+}
+$('barGo').addEventListener('click', () => {
+  if (canShareFiles()) shareSelected(); else $('btnZip').click();
+});
+
+/* ---------- コントロール ---------- */
+const syncLabels = () => {
+  $('vThr').textContent = $('thr').value;
+  $('vGap').textContent = (+$('gap').value/10).toFixed(1);
+  $('vMin').textContent = $('minsz').value;
+  $('vPad').textContent = $('pad').value;
+};
+['thr','gap','minsz'].forEach(id => $(id).addEventListener('input', () => { syncLabels(); clearTimeout(window._t); window._t = setTimeout(detect, 180); }));
+$('order').addEventListener('change', () => { sortPanels(); render(); buildThumbs(); });
+$('btnDetect').addEventListener('click', detect);
+['aspect','bg','jpg','prefix'].forEach(id => $(id).addEventListener('change', buildThumbs));
+$('pad').addEventListener('input', () => { syncLabels(); clearTimeout(window._p); window._p = setTimeout(buildThumbs, 200); });
+$('maxside').addEventListener('change', buildThumbs);
+$('btnAllOn').addEventListener('click', () => { panels.forEach(p => p.on = true); render(); buildThumbs(); });
+$('btnAllOff').addEventListener('click', () => { panels.forEach(p => p.on = false); render(); buildThumbs(); });
+syncLabels();
+
+// ?sample=... で動作確認用に自動読み込み
+const sp = new URLSearchParams(location.search).get('sample');
+if (sp) loadURL(sp);
+window.__app = { get panels(){ return panels; }, detect, renderPanel };
+
+// ホーム画面に追加したときオフラインでも動くように（http(s)のときだけ）
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+})();
+</script>
+</body>
+</html>
