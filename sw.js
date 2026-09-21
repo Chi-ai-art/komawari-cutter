@@ -1,5 +1,7 @@
-// オフラインでも開けるように、ページ一式をキャッシュしておく
-const CACHE = 'komawari-v1';
+// オフラインでも開けるようにするキャッシュ。
+// ページ本体は「まずネットワーク」（更新をすぐ受け取るため）、
+// アイコンなどの部品は「まずキャッシュ」（速さのため）。
+const CACHE = 'komawari-v2';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './apple-touch-icon.png', './favicon.png',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'];
@@ -12,11 +14,24 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const isPage = req.mode === 'navigate' || (req.destination === 'document');
+  if (isPage){
+    // まずネットワーク。つながらないときだけキャッシュ（＝オフライン）
+    e.respondWith(
+      fetch(req).then(res => {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => {});
+        return res;
+      }).catch(() => caches.match('./index.html').then(hit => hit || caches.match('./')))
+    );
+    return;
+  }
   e.respondWith(
-    caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
+    caches.match(req).then(hit => hit || fetch(req).then(res => {
       const copy = res.clone();
-      caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+      caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
       return res;
     }).catch(() => hit))
   );

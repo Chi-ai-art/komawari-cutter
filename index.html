@@ -156,7 +156,7 @@
         <label class="f">コマの間の白さ<span class="val" id="vThr"></span></label>
         <input type="range" id="thr" min="180" max="253" value="238">
         <label class="f">すきまの細さ（%）<span class="val" id="vGap"></span></label>
-        <input type="range" id="gap" min="2" max="40" value="8">
+        <input type="range" id="gap" min="1" max="40" value="3">
         <label class="f">小さすぎるコマを無視（%）<span class="val" id="vMin"></span></label>
         <input type="range" id="minsz" min="2" max="30" value="7">
         <label class="f">読む順番</label>
@@ -295,15 +295,16 @@ function trim(r){
   while (y1 > y0 && inkCount(x0,y1-1,x1,y1) === 0) y1--;
   while (x0 < x1 && inkCount(x0,y0,x0+1,y1) === 0) x0++;
   while (x1 > x0 && inkCount(x1-1,y0,x1,y1) === 0) x1--;
-  return {x0,y0,x1,y1};
+  return {x0,y0,x1,y1, relaxed:r.relaxed};
 }
 
 // 領域内の「ほぼ空白」の連続を探して分割位置を返す
-function cuts(r, axis, minGap, minSize){
+function cuts(r, axis, minGap, minSize, tolFrac){
   const {x0,y0,x1,y1} = r;
   const len = axis === 'y' ? (y1-y0) : (x1-x0);
   const span = axis === 'y' ? (x1-x0) : (y1-y0);
-  const tol = Math.max(0, Math.floor(span * 0.004));
+  // すきまの行にも絵のにじみ（圧縮ノイズ）が少し残るので、その分を見逃す
+  const tol = Math.max(2, Math.floor(span * tolFrac));
   const blank = new Uint8Array(len);
   for (let i = 0; i < len; i++){
     const c = axis === 'y'
@@ -326,25 +327,108 @@ function cuts(r, axis, minGap, minSize){
   return segs;
 }
 
-function split(r, minGap, minSize, out, depth){
+function split(r, minGap, minSize, tolFrac, out, depth){
   r = trim(r);
   const w = r.x1-r.x0, h = r.y1-r.y0;
   if (w < minSize || h < minSize) return;
   if (depth > 12){ out.push(r); return; }
 
-  const rows = cuts(r, 'y', minGap, minSize);
+  const rows = cuts(r, 'y', minGap, minSize, tolFrac);
   if (rows.length > 1){
-    for (const [a,b] of rows) split({x0:r.x0, y0:r.y0+a, x1:r.x1, y1:r.y0+b}, minGap, minSize, out, depth+1);
+    for (const [a,b] of rows) split({x0:r.x0, y0:r.y0+a, x1:r.x1, y1:r.y0+b}, minGap, minSize, tolFrac, out, depth+1);
     return;
   }
-  const cols = cuts(r, 'x', minGap, minSize);
+  const cols = cuts(r, 'x', minGap, minSize, tolFrac);
   if (cols.length > 1){
     const list = cols.map(([a,b]) => ({x0:r.x0+a, y0:r.y0, x1:r.x0+b, y1:r.y1}));
     if ($('order').value === 'rtl') list.reverse();
-    for (const c of list) split(c, minGap, minSize, out, depth+1);
+    for (const c of list) split(c, minGap, minSize, tolFrac, out, depth+1);
     return;
   }
+
+  // 切れなかったコマは、条件をゆるめて一度だけ切り直してみる
+  // （すきまが細い・にじみが多い漫画で、隣どうしがくっついたまま残るのを防ぐ）
+  if (!r.relaxed){
+    const g2 = Math.max(2, Math.round(minGap*0.5)), t2 = tolFrac*2.5;
+    const rows2 = cuts(r, 'y', g2, minSize, t2);
+    if (rows2.length > 1){
+      for (const [a,b] of rows2) split({x0:r.x0, y0:r.y0+a, x1:r.x1, y1:r.y0+b, relaxed:true}, minGap, minSize, tolFrac, out, depth+1);
+      return;
+    }
+    const cols2 = cuts(r, 'x', g2, minSize, t2);
+    if (cols2.length > 1){
+      const list = cols2.map(([a,b]) => ({x0:r.x0+a, y0:r.y0, x1:r.x0+b, y1:r.y1, relaxed:true}));
+      if ($('order').value === 'rtl') list.reverse();
+      for (const c of list) split(c, minGap, minSize, tolFrac, out, depth+1);
+      return;
+    }
+  }
   out.push(r);
+}
+
+/* 枠線のつながりでコマを見つける（すきまが1〜2pxしかない漫画向け）
+   絵を1pxやせさせて細いにじみの橋を切り、つながった塊ごとに囲みを取る */
+function detectBlobs(thr, minSize, region){
+  buildMask(thr);
+  const W = iw, H = ih;
+  const rx0 = region ? region.x0 : 0, ry0 = region ? region.y0 : 0;
+  const rx1 = region ? region.x1 : W, ry1 = region ? region.y1 : H;
+  const er = new Uint8Array(W*H);
+  for (let y = Math.max(1,ry0+1); y < Math.min(H-1, ry1-1); y++){
+    const o = y*W;
+    for (let x = Math.max(1,rx0+1); x < Math.min(W-1, rx1-1); x++){
+      const i = o+x;
+      if (mask[i] && mask[i-1] && mask[i+1] && mask[i-W] && mask[i+W]) er[i] = 1;
+    }
+  }
+  const seen = new Uint8Array(W*H);
+  const stack = new Int32Array(W*H);
+  const boxes = [];
+  for (let s = 0; s < W*H; s++){
+    if (!er[s] || seen[s]) continue;
+    let sp = 0; stack[sp++] = s; seen[s] = 1;
+    let x0 = s%W, x1 = x0, y0 = (s/W)|0, y1 = y0, n = 0;
+    while (sp){
+      const i = stack[--sp]; n++;
+      const x = i%W, y = (i/W)|0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0     && er[i-1] && !seen[i-1]){ seen[i-1] = 1; stack[sp++] = i-1; }
+      if (x < W-1   && er[i+1] && !seen[i+1]){ seen[i+1] = 1; stack[sp++] = i+1; }
+      if (y > 0     && er[i-W] && !seen[i-W]){ seen[i-W] = 1; stack[sp++] = i-W; }
+      if (y < H-1   && er[i+W] && !seen[i+W]){ seen[i+W] = 1; stack[sp++] = i+W; }
+    }
+    const bw = x1-x0+1, bh = y1-y0+1;
+    if (bw >= minSize && bh >= minSize && n >= bw*0.5) boxes.push({x0, y0, x1:x1+1, y1:y1+1, n});
+  }
+  // 大きい順に見て、すでにある囲みの中にほぼ収まるものは捨てる（コマの中の絵や吹き出し）
+  boxes.sort((a,b) => (b.x1-b.x0)*(b.y1-b.y0) - (a.x1-a.x0)*(a.y1-a.y0));
+  const keep = [];
+  for (const b of boxes){
+    const area = (b.x1-b.x0)*(b.y1-b.y0);
+    let inside = false;
+    for (const k of keep){
+      const ox = Math.max(0, Math.min(b.x1,k.x1) - Math.max(b.x0,k.x0));
+      const oy = Math.max(0, Math.min(b.y1,k.y1) - Math.max(b.y0,k.y0));
+      if (ox*oy > area*0.6){ inside = true; break; }
+    }
+    if (!inside) keep.push(b);
+  }
+  return keep;
+}
+
+// つながり検出の結果が「コマ割りとして妥当か」をざっくり判定する
+function blobsPlausible(boxes){
+  if (boxes.length < 2 || boxes.length > 30) return false;
+  const total = boxes.reduce((s,b) => s + (b.x1-b.x0)*(b.y1-b.y0), 0);
+  return total >= iw*ih*0.45;   // ページの半分くらいはコマで埋まっているはず
+}
+
+function detectOnce(thr, minGap, minSize, tolFrac){
+  buildMask(thr);
+  const out = [];
+  split({x0:0, y0:0, x1:iw, y1:ih}, minGap, minSize, tolFrac, out, 0);
+  return out;
 }
 
 function detect(){
@@ -352,19 +436,53 @@ function detect(){
   const t0 = performance.now();
   const thr = +$('thr').value;
   const short = Math.min(src.width, src.height);
-  const minGap = Math.max(2, Math.round(short * (+$('gap').value) / 1000));
+  const minGap = Math.max(1, Math.round(short * (+$('gap').value) / 1000));
   const minSize = Math.max(8, Math.round(short * (+$('minsz').value) / 100));
 
-  buildMask(thr);
-  const out = [];
-  split({x0:0, y0:0, x1:iw, y1:ih}, minGap, minSize, out, 0);
+  let out = detectOnce(thr, minGap, minSize, 0.02);
+  let note = '';
+
+  // すきま方式でコマを取りこぼしていそうなら、枠線のつながり方式も試して多いほうを採る
+  const blobs = detectBlobs(thr, minSize);
+  if (blobsPlausible(blobs) && blobs.length > out.length){
+    out = blobs;
+    note = '（枠線のつながりで検出）';
+  }
+
+  // くっついたまま残ったコマは、その中だけを枠線のつながりで見直す
+  const refined = [];
+  for (const r of out){
+    const area = (r.x1-r.x0)*(r.y1-r.y0);
+    const sub = detectBlobs(thr, minSize, r);
+    const cover = sub.reduce((s,b) => s + (b.x1-b.x0)*(b.y1-b.y0), 0);
+    if (sub.length > 1 && sub.length <= 6 && cover >= area*0.6){
+      refined.push(...sub);
+      if (!note) note = '（枠線のつながりで細かく検出）';
+    } else refined.push(r);
+  }
+  out = refined;
+  // 1コマのまま＝すきまが細い／うすい漫画。すこしずつ条件をゆるめて探し直す
+  if (out.length < 2){
+    const tries = [
+      [thr, Math.max(2, Math.round(minGap*0.5)), 0.02],
+      [thr, 2, 0.035],
+      [246, 3, 0.03],
+      [250, 2, 0.05],
+    ];
+    for (const [t, g, tf] of tries){
+      const r = detectOnce(t, g, minSize, tf);
+      if (r.length > 1){ out = r; note = '（すきまが細いので自動でゆるめました）'; break; }
+    }
+  }
 
   const prevOn = new Map(panels.map(p => [p.x+','+p.y, p.on]));
   panels = out.map(r => ({
     x:r.x0, y:r.y0, w:r.x1-r.x0, h:r.y1-r.y0,
     on: prevOn.has(r.x0+','+r.y0) ? prevOn.get(r.x0+','+r.y0) : true
   }));
-  $('status').textContent = `${panels.length}コマ検出（${Math.round(performance.now()-t0)}ms）`;
+  sortPanels();
+  $('status').textContent = `${panels.length}コマ検出${note}`
+    + (panels.length < 2 ? ' — 切れないときは「すきまの細さ」を小さく、「コマの間の白さ」を大きくしてみてください。' : '');
   render(); buildThumbs();
 }
 
@@ -682,7 +800,7 @@ syncLabels();
 // ?sample=... で動作確認用に自動読み込み
 const sp = new URLSearchParams(location.search).get('sample');
 if (sp) loadURL(sp);
-window.__app = { get panels(){ return panels; }, detect, renderPanel };
+window.__app = { get panels(){ return panels; }, detect, renderPanel, detectBlobs, detectOnce };
 
 // ホーム画面に追加したときオフラインでも動くように（http(s)のときだけ）
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
