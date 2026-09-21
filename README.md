@@ -5,11 +5,17 @@
 
 ## 公開先
 
-- Artifact（スマホでも使える公開版）: https://claude.ai/artifact/RaohqfmE2yPNETJqegoWRy
-  - 非公開（自分と共有した人だけ）。ダウンロードは確認ダイアログごしに保存される
-  - 更新するときは、このリポジトリの `index.html` を直したあと同じ内容を Artifact 側にも反映する
-- ローカル: `index.html` をダブルクリック
-- Netlify に本番公開する場合はこのフォルダをそのまま置けばよい（manifest・アイコン・Service Worker 入りで、ホーム画面に追加するとアプリとして開く）
+- 公開URL: **（Netlify でサイトを作成したらここに記入）**
+- リポジトリ: `Chi-ai-art/komawari-cutter`（**Private**）
+- ホスティング: **Netlify**。`main` への push で自動デプロイ（反映は1分ほど）
+- 直し方: このフォルダで編集 → `git add -A && git commit && git push` だけ
+
+### Netlify の初回接続（1度だけ）
+
+1. https://app.netlify.com → **Add new site → Import an existing project → GitHub**
+2. `komawari-cutter` を選ぶ（一覧に出ないときは *Configure the Netlify app on GitHub* からこのリポジトリへのアクセスを許可する）
+3. ビルド設定はそのまま（`netlify.toml` に `publish = "."` が入っているのでビルドコマンドは不要）→ **Deploy**
+4. Site configuration → Change site name で好きなURLに変更できる
 
 ## 使い方
 
@@ -49,9 +55,10 @@
 | `index.html` | ツール本体（1ファイル完結） |
 | `manifest.webmanifest` / `icon-*.png` / `apple-touch-icon.png` | ホーム画面に追加したとき用 |
 | `sw.js` | オフライン用のキャッシュ |
-| `sample/test.webp` | 動作確認用の漫画 |
+| `netlify.toml` | Netlify の設定（ビルド不要・sw.js をキャッシュさせない） |
+| `sample/test.webp` | 動作確認用の漫画（gitignore 済み・公開しない） |
 
 ## メモ
 
 - スレッズのスライドは1投稿20枚まで。並び順は番号のとおり
-- `sample/test.webp` は動作確認用。`index.html?sample=sample/test.webp` で自動読み込みできる（ローカルサーバー経由のとき）
+- `sample/test.webp` は手元での動作確認用。リポジトリには入れていない（`index.html?sample=sample/test.webp` でローカルサーバー経由なら自動読み込みできる）
