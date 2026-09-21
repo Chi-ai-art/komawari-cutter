@@ -49,7 +49,8 @@
 | ファイル | 中身 |
 |---|---|
 | `index.html` | ツール本体（1ファイル完結） |
-| `manifest.webmanifest` / `icon-*.png` / `apple-touch-icon.png` | ホーム画面に追加したとき用 |
+| `manifest.webmanifest` / `icon-*.png` / `apple-touch-icon.png` / `favicon.png` | アイコン。`logo-source.webp`（バナっこがハサミを持っている絵）から生成している。丸く切り抜かれる端末用に `icon-maskable-512.png` は余白を多めにしてある |
+| `logo-source.webp` | アイコンの元画像（タイトル文字入りの透過素材） |
 | `sw.js` | オフライン用のキャッシュ |
 | `sample/test.webp` | 動作確認用の漫画（gitignore 済み・公開しない） |
 

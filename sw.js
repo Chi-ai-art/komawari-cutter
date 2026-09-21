@@ -1,8 +1,8 @@
 // オフラインでも開けるようにするキャッシュ。
 // ページ本体は「まずネットワーク」（更新をすぐ受け取るため）、
 // アイコンなどの部品は「まずキャッシュ」（速さのため）。
-const CACHE = 'komawari-v3';
-const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
+const CACHE = 'komawari-v4';
+const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png',
   './apple-touch-icon.png', './favicon.png',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'];
 
