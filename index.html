@@ -31,6 +31,7 @@
     --line:#3a3532; --accent:#e58b6f; --sel:#6fc3bc;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none !important}   /* .row や #actionbar の display に負けないように */
   body{
     margin:0; background:var(--bg); color:var(--ink);
     font-family:"Hiragino Maru Gothic ProN","Hiragino Sans",-apple-system,"Segoe UI","Yu Gothic UI",sans-serif;
@@ -38,6 +39,7 @@
   }
   header{padding:18px 16px 8px; max-width:1180px; margin:0 auto}
   h1{font-size:20px; margin:0 0 2px}
+  h1 img{display:block; width:min(330px, 74vw); height:auto; margin:0 0 2px}
   .lead{color:var(--sub); font-size:13px; margin:0}
   main{max-width:1180px; margin:0 auto; padding:12px 16px 60px}
   .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; box-shadow:var(--shadow); margin-bottom:14px}
@@ -90,7 +92,7 @@
   #actionbar{display:none}
   @media (max-width:760px){
     header{padding:14px 16px 4px}
-    h1{font-size:18px}
+    h1 img{width:min(280px, 78vw)}
     main{padding:8px 16px 96px}
     .col-side{flex:1 1 100%}
     .card{padding:12px; border-radius:12px}
@@ -115,7 +117,7 @@
 </head>
 <body>
 <header>
-  <h1>コマ割りカッター</h1>
+  <h1><img src="logo-header.webp" alt="コマ割りカッター" width="1618" height="600"></h1>
   <p class="lead">1枚漫画をコマごとに自動で切り出して、選んだコマだけまとめてダウンロード。スレッズのスライド投稿用。</p>
 </header>
 
