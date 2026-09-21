@@ -5,17 +5,10 @@
 
 ## 公開先
 
-- 公開URL: **（Netlify でサイトを作成したらここに記入）**
-- リポジトリ: `Chi-ai-art/komawari-cutter`（**Private**）
-- ホスティング: **Netlify**。`main` への push で自動デプロイ（反映は1分ほど）
-- 直し方: このフォルダで編集 → `git add -A && git commit && git push` だけ
-
-### Netlify の初回接続（1度だけ）
-
-1. https://app.netlify.com → **Add new site → Import an existing project → GitHub**
-2. `komawari-cutter` を選ぶ（一覧に出ないときは *Configure the Netlify app on GitHub* からこのリポジトリへのアクセスを許可する）
-3. ビルド設定はそのまま（`netlify.toml` に `publish = "."` が入っているのでビルドコマンドは不要）→ **Deploy**
-4. Site configuration → Change site name で好きなURLに変更できる
+- 公開URL: **https://chi-ai-art.github.io/komawari-cutter/**
+- リポジトリ: `Chi-ai-art/komawari-cutter`（**Public**。売り物のプロンプトなど秘密は入っていない。サンプル漫画も入れていない）
+- ホスティング: **GitHub Pages**。`main` への push で自動デプロイ（反映は1分ほど）
+- 直し方: このフォルダで編集 → `git add -A && git commit -m "..." && git push` だけ
 
 ## 使い方
 
@@ -55,7 +48,6 @@
 | `index.html` | ツール本体（1ファイル完結） |
 | `manifest.webmanifest` / `icon-*.png` / `apple-touch-icon.png` | ホーム画面に追加したとき用 |
 | `sw.js` | オフライン用のキャッシュ |
-| `netlify.toml` | Netlify の設定（ビルド不要・sw.js をキャッシュさせない） |
 | `sample/test.webp` | 動作確認用の漫画（gitignore 済み・公開しない） |
 
 ## メモ
