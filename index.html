@@ -151,7 +151,8 @@
           <canvas id="overlay"></canvas>
         </div>
         <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　<b>枠のふち（オレンジの取っ手）をドラッグ＝そのまま伸ばす</b>　・　枠の中をドラッグ＝移動　・　何もない所をドラッグ＝コマを足す　・　<b>赤い✕ボタン（または Delete キー）＝そのコマを消す</b></p>
-        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。<b>大きさを変えたいときは「枠をなおす」をオンにして、オレンジの取っ手をドラッグ</b>。いらないコマは<b>赤い✕</b>で消せます。</p>
+        <p class="hint" id="dbg" hidden style="color:#d2543a"></p>
+        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。コマをタップすると<b>オレンジの取っ手</b>が出るので、そのままドラッグして大きさを変えられます。枠を動かしたいときは<b>「枠をなおす」をオン</b>に。いらないコマは<b>赤い✕</b>で消せます。</p>
       </div>
 
       <div class="card">
@@ -825,6 +826,14 @@ function setEdit(on){
 $('btnEdit').addEventListener('click', () => setEdit(!editMode));
 $('barEdit').addEventListener('click', () => setEdit(!editMode));
 
+const DEBUG = new URLSearchParams(location.search).has('debug');
+function dbg(msg){
+  if (!DEBUG) return;
+  const el = $('dbg'); if (!el) return;
+  el.hidden = false;
+  el.textContent = msg + ' / mode=' + mode + ' focus=' + focusIdx + ' edit=' + editMode;
+}
+
 function pt(e){
   const r = overlay.getBoundingClientRect();
   return {x: e.clientX - r.left, y: e.clientY - r.top};
@@ -885,16 +894,34 @@ const cursorFor = d =>
   (d === 'e' || d === 'w') ? 'ew-resize' :
   (d === 'nw' || d === 'se') ? 'nwse-resize' : 'nesw-resize';
 
+// iOS では touchstart で止めないとスクロールに持っていかれるので、
+// 取っ手・✕ に触れたときだけスクロールを抑える
+overlay.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) return;
+  const r = overlay.getBoundingClientRect();
+  const p = {x: e.touches[0].clientX - r.left, y: e.touches[0].clientY - r.top};
+  const onHandle = focusIdx >= 0 && panels[focusIdx] && edgeAt(focusIdx, p);
+  if (onDelBadge(p) || onHandle || editMode) e.preventDefault();
+}, {passive:false});
+
 overlay.addEventListener('pointerdown', e => {
   const p = pt(e);
+  dbg('down ' + e.pointerType);
   if (onDelBadge(p)){          // ✕ を押した
     mode = 'del'; startPt = p;
     try { overlay.setPointerCapture(e.pointerId); } catch {}
     return;
   }
-  // 指で「えらぶ」モードのときは、タップだけ拾ってスクロールは邪魔しない
+  // 指のとき：取っ手を出しているコマの取っ手に触れたら、モードに関係なく伸縮できる
   if (e.pointerType !== 'mouse' && !editMode){
-    mode = 'tap'; startPt = p; active = hit(p);
+    const d = (focusIdx >= 0 && panels[focusIdx]) ? edgeAt(focusIdx, p) : null;
+    if (d){
+      try { overlay.setPointerCapture(e.pointerId); } catch {}
+      active = focusIdx; dir = d; mode = 'resize'; startPt = p; orig = {...panels[active]};
+      dbg('取っ手 ' + d); drawBoxes(); return;
+    }
+    mode = 'tap'; startPt = p; active = hit(p);   // それ以外はタップ扱い（ページのスクロールを邪魔しない）
+    dbg('タップ ' + (active >= 0 ? ('コマ'+(active+1)) : 'なし'));
     return;
   }
   try { overlay.setPointerCapture(e.pointerId); } catch {}
@@ -1163,7 +1190,7 @@ const sp = new URLSearchParams(location.search).get('sample');
 if (sp) loadURL(sp);
 window.__app = { get panels(){ return panels; }, detect, renderPanel, detectBlobs, detectOnce };
 
-const VERSION = '2026-09-23d';
+const VERSION = '2026-09-23e';
 $('ver').textContent = VERSION;
 console.log('コマ割りカッター', VERSION);
 
