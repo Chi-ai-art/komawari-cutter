@@ -41,6 +41,9 @@
   h1{font-size:20px; margin:0 0 2px}
   h1 img{display:block; width:min(330px, 74vw); height:auto; margin:0 0 2px}
   .lead{color:var(--sub); font-size:13px; margin:0}
+  .ver{display:inline-block; font-size:11px; opacity:.75; white-space:nowrap}
+  .link{appearance:none; border:none; background:none; color:var(--accent); font:inherit; font-size:11px;
+        text-decoration:underline; cursor:pointer; padding:2px 4px}
   main{max-width:1180px; margin:0 auto; padding:12px 16px 60px}
   .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; box-shadow:var(--shadow); margin-bottom:14px}
   .row{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
@@ -50,7 +53,7 @@
     border:2px dashed var(--line); border-radius:14px; padding:34px 16px; text-align:center;
     color:var(--sub); cursor:pointer; background:var(--panel); transition:.15s;
   }
-  #drop.hot{border-color:var(--accent); color:var(--ink); background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
+  #drop.hot{border-color:var(--accent); color:var(--ink); background:var(--panel); background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
   #stage{position:relative; width:100%}
   #view{width:100%; display:block; border-radius:10px; background:#fff}
   #overlay{position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; touch-action:manipulation}
@@ -87,7 +90,7 @@
   .chk input{accent-color:var(--accent); width:16px; height:16px}
   .sep{height:1px; background:var(--line); margin:14px 0}
   .toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px}
-  .pill{font-size:12px; color:var(--sub); background:color-mix(in srgb,var(--line) 50%,transparent); padding:3px 10px; border-radius:999px}
+  .pill{font-size:12px; color:var(--sub); background:var(--bg); background:color-mix(in srgb,var(--line) 50%,transparent); padding:3px 10px; border-radius:999px}
   .btn.on{background:var(--sel); border-color:var(--sel); color:#fff; font-weight:700}
   #actionbar{display:none}
   @media (max-width:760px){
@@ -107,8 +110,9 @@
     #actionbar{
       display:flex; gap:8px; position:fixed; left:0; right:0; bottom:0; z-index:20;
       padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+      background:var(--panel);
       background:color-mix(in srgb,var(--panel) 92%,transparent);
-      backdrop-filter:blur(8px); border-top:1px solid var(--line);
+      -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); border-top:1px solid var(--line);
     }
     #actionbar .btn{flex:1; text-align:center}
   }
@@ -118,7 +122,9 @@
 <body>
 <header>
   <h1><img src="logo-header.webp" alt="コマ割りカッター" width="1618" height="600"></h1>
-  <p class="lead">1枚漫画をコマごとに自動で切り出して、選んだコマだけまとめてダウンロード。スレッズのスライド投稿用。</p>
+  <p class="lead">1枚漫画をコマごとに自動で切り出して、選んだコマだけまとめてダウンロード。スレッズのスライド投稿用。
+    <span class="ver">ver <span id="ver"></span> <button class="link" id="btnUpdate">最新に更新</button></span>
+  </p>
 </header>
 
 <main>
@@ -634,7 +640,7 @@ function drawBoxes(){
     octx.fillStyle = '#fff'; octx.font = 'bold 14px system-ui'; octx.textAlign='center'; octx.textBaseline='middle';
     octx.fillText(String(i+1), x+r+4, y+r+5);
   });
-  if (focusIdx >= 0 && panels[focusIdx]) drawHandles(focusIdx);
+  if (focusIdx >= 0 && panels[focusIdx]){ try { drawHandles(focusIdx); } catch (err){ console.warn('handles', err); } }
   if (dragBox){
     octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2; octx.setLineDash([5,4]);
     octx.strokeRect(dragBox.x, dragBox.y, dragBox.w, dragBox.h); octx.setLineDash([]);
@@ -649,8 +655,19 @@ function drawHandles(i){
   const s = coarse ? 10 : 7;
   octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2;
   octx.strokeRect(x0, y0, x1-x0, y1-y0);
+  // 角丸の四角（roundRect は古いスマホのブラウザに無いので自前で描く）
+  const rrect = (x, y, w, h, r) => {
+    r = Math.min(r, w/2, h/2);
+    octx.beginPath();
+    octx.moveTo(x+r, y);
+    octx.lineTo(x+w-r, y); octx.quadraticCurveTo(x+w, y, x+w, y+r);
+    octx.lineTo(x+w, y+h-r); octx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    octx.lineTo(x+r, y+h); octx.quadraticCurveTo(x, y+h, x, y+h-r);
+    octx.lineTo(x, y+r); octx.quadraticCurveTo(x, y, x+r, y);
+    octx.closePath();
+  };
   const draw = (cx, cy, w, h) => {
-    octx.beginPath(); octx.roundRect(cx-w, cy-h, w*2, h*2, 3);
+    rrect(cx-w, cy-h, w*2, h*2, 3);
     octx.fillStyle = '#fff'; octx.fill();
     octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2; octx.stroke();
   };
@@ -1037,6 +1054,26 @@ syncLabels();
 const sp = new URLSearchParams(location.search).get('sample');
 if (sp) loadURL(sp);
 window.__app = { get panels(){ return panels; }, detect, renderPanel, detectBlobs, detectOnce };
+
+const VERSION = '2026-09-23c';
+$('ver').textContent = VERSION;
+console.log('コマ割りカッター', VERSION);
+
+// 古いページを掴んだままのときの脱出口：キャッシュを捨てて取り直す
+$('btnUpdate').addEventListener('click', async () => {
+  const b = $('btnUpdate'); b.textContent = '更新中…'; b.disabled = true;
+  try {
+    if ('serviceWorker' in navigator){
+      const rs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(rs.map(r => r.unregister()));
+    }
+    if (window.caches){
+      const ks = await caches.keys();
+      await Promise.all(ks.map(k => caches.delete(k)));
+    }
+  } catch {}
+  location.replace(location.pathname + '?u=' + Date.now());
+});
 
 // ホーム画面に追加したときオフラインでも動くように（http(s)のときだけ）
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
