@@ -166,12 +166,29 @@
     <div class="col-side">
       <div class="card">
         <h2>じどう検出</h2>
+        <label class="f">切り方</label>
+        <select id="mode">
+          <option value="auto" selected>自動（漫画のコマ割り）</option>
+          <option value="grid">格子で等分（スタンプ・絵文字シート）</option>
+        </select>
+        <div id="gridOpts" hidden>
+          <label class="f">よこ（列）× たて（行）</label>
+          <div style="display:flex; gap:8px; align-items:center">
+            <input type="number" id="gcols" min="1" max="12" value="4">
+            <span style="color:var(--sub)">×</span>
+            <input type="number" id="grows" min="1" max="12" value="4">
+            <button class="btn" id="btnGuess" style="white-space:nowrap">自動で数える</button>
+          </div>
+          <div class="chk"><input type="checkbox" id="gtrim" checked><label for="gtrim">中身に合わせて余白を詰める</label></div>
+        </div>
+        <div id="autoOpts">
         <label class="f">コマの間の白さ<span class="val" id="vThr"></span></label>
         <input type="range" id="thr" min="180" max="253" value="238">
         <label class="f">すきまの細さ（%）<span class="val" id="vGap"></span></label>
         <input type="range" id="gap" min="1" max="40" value="3">
         <label class="f">小さすぎるコマを無視（%）<span class="val" id="vMin"></span></label>
         <input type="range" id="minsz" min="2" max="30" value="7">
+        </div>
         <label class="f">読む順番</label>
         <select id="order">
           <option value="ltr">左 → 右（横書きふう）</option>
@@ -195,6 +212,7 @@
         </select>
         <label class="f">よはくの色</label>
         <select id="bg">
+          <option value="none">透過のまま（PNG）</option>
           <option value="#ffffff" selected>白</option>
           <option value="auto">自動（コマのふちの色）</option>
           <option value="#f7f5f1">生成り</option>
@@ -264,6 +282,7 @@ function loadURL(url, done){
     src.getContext('2d', {willReadFrequently:true}).drawImage(im, 0, 0);
     ws.hidden = false;
     $('actionbar').hidden = false;
+    if (hasAlpha()) $('bg').value = 'none';      // 透過画像はそのまま透過で書き出す
     if (coarse){ $('hintPC').hidden = true; $('hintSP').hidden = false; }
     $('imgInfo').textContent = `${src.width} × ${src.height}px`;
     detect();
@@ -271,6 +290,18 @@ function loadURL(url, done){
   };
   im.onerror = () => { $('status').textContent = '画像を読み込めませんでした。'; if (done) done(); };
   im.src = url;
+}
+
+// 透過（背景が抜けている）画像かどうか
+function hasAlpha(){
+  const s2 = 60;
+  const t = document.createElement('canvas'); t.width = s2; t.height = s2;
+  const g = t.getContext('2d', {willReadFrequently:true});
+  g.drawImage(src, 0, 0, s2, s2);
+  const d = g.getImageData(0,0,s2,s2).data;
+  let clear = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 24) clear++;
+  return clear > s2*s2*0.05;
 }
 
 /* ---------- 検出（再帰XYカット） ---------- */
@@ -634,8 +665,63 @@ function detectOnce(thr, minGap, minSize, tolFrac){
   return out;
 }
 
+/* 格子（グリッド）で等分する。スタンプ・絵文字シート向け。
+   透過PNGでも、白地でも、まわりの余白を落としてから等分する。 */
+function guessGrid(){
+  if (!src) return {cols:4, rows:4};
+  buildMask(+$('thr').value);
+  const short = Math.min(iw, ih);
+  const minGap = Math.max(2, Math.round(short*0.01));
+  const minSize = Math.max(8, Math.round(short*0.04));
+  const full = trim({x0:0, y0:0, x1:iw, y1:ih});
+  const cols = cuts(full, 'x', minGap, minSize, 0.005).length;
+  const rows = cuts(full, 'y', minGap, minSize, 0.005).length;
+  return {cols: clamp(cols||1, 1, 12), rows: clamp(rows||1, 1, 12)};
+}
+
+function gridDetect(){
+  const cols = clamp(+$('gcols').value || 1, 1, 12);
+  const rows = clamp(+$('grows').value || 1, 1, 12);
+  const doTrim = $('gtrim').checked;
+  buildMask(+$('thr').value);
+  const full = trim({x0:0, y0:0, x1:iw, y1:ih});       // まわりの余白を落とす
+  const cw = (full.x1-full.x0)/cols, ch = (full.y1-full.y0)/rows;
+  const margin = Math.round(Math.min(iw,ih)*0.005);
+  const out = [];
+  for (let r = 0; r < rows; r++){
+    for (let c = 0; c < cols; c++){
+      const cell = {
+        x0: Math.round(full.x0 + c*cw), y0: Math.round(full.y0 + r*ch),
+        x1: Math.round(full.x0 + (c+1)*cw), y1: Math.round(full.y0 + (r+1)*ch)
+      };
+      let b = cell;
+      if (doTrim){
+        const t = trim(cell);
+        if (t.x1 > t.x0 && t.y1 > t.y0){
+          b = {x0: Math.max(cell.x0, t.x0-margin), y0: Math.max(cell.y0, t.y0-margin),
+               x1: Math.min(cell.x1, t.x1+margin), y1: Math.min(cell.y1, t.y1+margin)};
+        } else continue;                                  // 中身が無いマスは飛ばす
+      }
+      out.push(b);
+    }
+  }
+  return out;
+}
+
 function detect(){
   if (!src) return;
+  if ($('mode').value === 'grid'){
+    const out = gridDetect();
+    const prevOn = new Map(panels.map(p => [p.x+','+p.y, p.on]));
+    panels = out.map(r => ({
+      id: nextId++, x:r.x0, y:r.y0, w:r.x1-r.x0, h:r.y1-r.y0,
+      on: prevOn.has(r.x0+','+r.y0) ? prevOn.get(r.x0+','+r.y0) : true
+    }));
+    sortPanels();
+    $('status').textContent = `${panels.length}コマに等分しました（${$('gcols').value}×${$('grows').value}）`;
+    render(); buildThumbs();
+    return;
+  }
   const t0 = performance.now();
   const thr = +$('thr').value;
   const short = Math.min(src.width, src.height);
@@ -1082,6 +1168,7 @@ function renderPanel(p){
   const padPct = (+$('pad').value)/100;
   const maxSide = clamp(+$('maxside').value || 1440, 200, 4096);
   const bgSel = $('bg').value;
+  const keepAlpha = bgSel === 'none';
   const bg = bgSel === 'auto' ? edgeColor(p) : bgSel;
 
   const pw = Math.round(p.w), ph = Math.round(p.h);
@@ -1104,15 +1191,16 @@ function renderPanel(p){
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
   g.imageSmoothingQuality = 'high';
-  g.fillStyle = bg; g.fillRect(0,0,W,H);
+  if (!keepAlpha){ g.fillStyle = bg; g.fillRect(0,0,W,H); }   // 透過のままのときは塗らない
   const dw = Math.round(pw * k), dh = Math.round(ph * k);
   g.drawImage(src, Math.round(p.x), Math.round(p.y), pw, ph,
               Math.round((W-dw)/2), Math.round((H-dh)/2), dw, dh);
   return c;
 }
 
-function fileExt(){ return $('jpg').checked ? 'jpg' : 'png'; }
-function mime(){ return $('jpg').checked ? 'image/jpeg' : 'image/png'; }
+const keepsAlpha = () => $('bg').value === 'none';
+function fileExt(){ return (!keepsAlpha() && $('jpg').checked) ? 'jpg' : 'png'; }
+function mime(){ return (!keepsAlpha() && $('jpg').checked) ? 'image/jpeg' : 'image/png'; }
 const pad2 = n => String(n).padStart(2,'0');
 function nameOf(i){ return `${$('prefix').value || 'panel'}_${pad2(i+1)}.${fileExt()}`; }
 
@@ -1231,6 +1319,23 @@ $('btnNew').addEventListener('click', () => {
   setEdit(false);
   window.scrollTo({top:0, behavior:'smooth'});
 });
+$('mode').addEventListener('change', () => {
+  const grid = $('mode').value === 'grid';
+  $('gridOpts').hidden = !grid;
+  $('autoOpts').hidden = grid;
+  if (grid && src){                       // 初回は列と行を数えてから切る
+    const g = guessGrid();
+    $('gcols').value = g.cols; $('grows').value = g.rows;
+  }
+  if (src){ panels = []; focusIdx = -1; detect(); }
+});
+$('btnGuess').addEventListener('click', () => {
+  if (!src) return;
+  const g = guessGrid();
+  $('gcols').value = g.cols; $('grows').value = g.rows;
+  panels = []; detect();
+});
+['gcols','grows','gtrim'].forEach(id => $(id).addEventListener('change', () => { if (src){ panels = []; focusIdx = -1; detect(); } }));
 $('btnAdd').addEventListener('click', addPanel);
 $('btnUndo').addEventListener('click', undo);
 $('btnAllOn').addEventListener('click', () => { panels.forEach(p => p.on = true); render(); buildThumbs(); });
@@ -1242,7 +1347,7 @@ const sp = new URLSearchParams(location.search).get('sample');
 if (sp) loadURL(sp);
 window.__app = { get panels(){ return panels; }, detect, renderPanel, detectBlobs, detectOnce };
 
-const VERSION = '2026-09-23f';
+const VERSION = '2026-09-23g';
 $('ver').textContent = VERSION;
 console.log('コマ割りカッター', VERSION);
 
