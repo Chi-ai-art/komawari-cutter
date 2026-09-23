@@ -481,6 +481,7 @@ function detect(){
 
   const prevOn = new Map(panels.map(p => [p.x+','+p.y, p.on]));
   panels = out.map(r => ({
+    id: nextId++,
     x:r.x0, y:r.y0, w:r.x1-r.x0, h:r.y1-r.y0,
     on: prevOn.has(r.x0+','+r.y0) ? prevOn.get(r.x0+','+r.y0) : true
   }));
@@ -560,6 +561,7 @@ window.addEventListener('resize', () => { if (src) render(); });
 /* ---------- マウス操作 ---------- */
 let mode = null, active = -1, startPt = null, dragBox = null, orig = null, dir = null;
 let focusIdx = -1;      // いま取っ手を出しているコマ
+let nextId = 1;         // コマの通し番号（並べ替えても同じコマを見失わないため）
 let edited = false;     // 手で直したかどうか（やり直すときの確認用）
 let editMode = false;
 const coarse = matchMedia('(pointer: coarse)').matches;
@@ -681,11 +683,11 @@ overlay.addEventListener('pointerup', () => {
   if (mode === 'maybe-move' && active >= 0 && !editMode){
     panels[active].on = !panels[active].on;            // クリック＝選択トグル（「枠をなおす」中は切り替えない）
   } else if (mode === 'new' && dragBox && dragBox.w > 12 && dragBox.h > 12){
-    panels.push({x:dragBox.x/scale, y:dragBox.y/scale, w:dragBox.w/scale, h:dragBox.h/scale, on:true});
-    sortPanels();
+    panels.push({id: nextId++, x:dragBox.x/scale, y:dragBox.y/scale, w:dragBox.w/scale, h:dragBox.h/scale, on:true});
     edited = true;
   }
   mode = null; dragBox = null; active = -1; dir = null;
+  renumber();                      // 位置が変わったら読み順に並べ直す
   render(); buildThumbs();
 });
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
@@ -697,6 +699,12 @@ function sortPanels(){
     if (Math.abs(a.y - b.y) > band) return a.y - b.y;
     return rtl ? (b.x - a.x) : (a.x - b.x);
   });
+}
+// 読み順に並べ直して番号を振り直す。取っ手を出していたコマは追いかける
+function renumber(){
+  const fid = (focusIdx >= 0 && panels[focusIdx]) ? panels[focusIdx].id : null;
+  sortPanels();
+  focusIdx = fid === null ? -1 : panels.findIndex(p => p.id === fid);
 }
 
 /* ---------- 書き出し ---------- */
@@ -772,7 +780,7 @@ function buildThumbs(){
     el.querySelector('.dl').addEventListener('click', () => {
       renderPanel(p).toBlob(b => saveBlob(b, nameOf(i)), mime(), 0.92);
     });
-    el.querySelector('.del').addEventListener('click', () => { panels.splice(i,1); render(); buildThumbs(); });
+    el.querySelector('.del').addEventListener('click', () => { panels.splice(i,1); if (focusIdx === i) focusIdx = -1; renumber(); render(); buildThumbs(); });
     grid.appendChild(el);
   });
 }
@@ -844,7 +852,7 @@ const syncLabels = () => {
   $('vPad').textContent = $('pad').value;
 };
 ['thr','gap','minsz'].forEach(id => $(id).addEventListener('input', () => { syncLabels(); clearTimeout(window._t); window._t = setTimeout(detect, 180); }));
-$('order').addEventListener('change', () => { sortPanels(); render(); buildThumbs(); });
+$('order').addEventListener('change', () => { renumber(); render(); buildThumbs(); });
 $('btnDetect').addEventListener('click', detect);
 ['aspect','bg','jpg','prefix'].forEach(id => $(id).addEventListener('change', buildThumbs));
 $('pad').addEventListener('input', () => { syncLabels(); clearTimeout(window._p); window._p = setTimeout(buildThumbs, 200); });
