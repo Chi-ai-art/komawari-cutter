@@ -143,6 +143,8 @@
           <button class="btn" id="btnAllOn">全部えらぶ</button>
           <button class="btn" id="btnAllOff">全部はずす</button>
           <button class="btn" id="btnEdit">枠をなおす</button>
+          <button class="btn" id="btnAdd">枠を追加</button>
+          <button class="btn" id="btnUndo" disabled>元に戻す</button>
           <button class="btn" id="btnRedetect">枠をやり直す</button>
           <button class="btn" id="btnNew">別の画像にする</button>
         </div>
@@ -150,9 +152,9 @@
           <canvas id="view"></canvas>
           <canvas id="overlay"></canvas>
         </div>
-        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　<b>枠のふち（オレンジの取っ手）をドラッグ＝そのまま伸ばす</b>　・　枠の中をドラッグ＝移動　・　何もない所をドラッグ＝コマを足す　・　<b>赤い✕ボタン（または Delete キー）＝そのコマを消す</b></p>
+        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　<b>枠のふち（オレンジの取っ手）をドラッグ＝そのまま伸ばす</b>　・　枠の中をドラッグ＝移動　・　何もない所をドラッグ＝コマを足す　・　<b>赤い✕ボタン（または Delete キー）＝そのコマを消す</b>　・　消しすぎたら「元に戻す」（Ctrl+Z）</p>
         <p class="hint" id="dbg" hidden style="color:#d2543a"></p>
-        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。コマをタップすると<b>オレンジの取っ手</b>が出るので、そのままドラッグして大きさを変えられます。枠を動かしたいときは<b>「枠をなおす」をオン</b>に。いらないコマは<b>赤い✕</b>で消せます。</p>
+        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。コマをタップすると<b>オレンジの取っ手</b>が出るので、そのままドラッグして大きさを変えられます。枠を動かしたいときは<b>「枠をなおす」をオン</b>に。いらないコマは<b>赤い✕</b>で消せます。消しすぎたら<b>「元に戻す」</b>、足りないときは<b>「枠を追加」</b>。</p>
       </div>
 
       <div class="card">
@@ -802,7 +804,9 @@ window.addEventListener('resize', () => { if (src) render(); });
 
 // Delete / Backspace で、取っ手を出しているコマを消す
 window.addEventListener('keydown', e => {
-  if (!src || focusIdx < 0) return;
+  if (!src) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'){ e.preventDefault(); undo(); return; }
+  if (focusIdx < 0) return;
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
   if (e.key === 'Delete' || e.key === 'Backspace'){ e.preventDefault(); deletePanel(focusIdx); }
@@ -860,8 +864,50 @@ function onDelBadge(p){
   const d = delBadge(focusIdx);
   return Math.hypot(p.x-d.cx, p.y-d.cy) <= d.r + (coarse ? 8 : 4);
 }
+/* 元に戻す用の履歴（直前の状態を積んでおく） */
+const HISTORY_MAX = 30;
+let history = [], pendingSnap = null;
+const snapshot = () => panels.map(p => ({...p}));
+const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+function pushHistory(snap){
+  history.push(snap || snapshot());
+  if (history.length > HISTORY_MAX) history.shift();
+  updateUndo();
+}
+function updateUndo(){
+  const b = $('btnUndo'); if (b) b.disabled = history.length === 0;
+}
+function undo(){
+  if (!history.length) return;
+  panels = history.pop();
+  focusIdx = -1; edited = true;
+  updateUndo(); render(); buildThumbs();
+  $('status').textContent = '元に戻しました（あと' + history.length + '回）';
+}
+
+// いま画面に見えているあたりに、新しい枠を置く
+function addPanel(){
+  if (!src) return;
+  pushHistory();
+  const r = overlay.getBoundingClientRect();
+  const visTop = Math.max(0, -r.top), visBot = Math.min(r.height, window.innerHeight - r.top);
+  const cy = (visTop + visBot) / 2 / scale;          // 画像の座標に直す
+  const cx = src.width / 2;
+  const w = Math.min(src.width*0.4, src.width - 20), h = Math.min(src.height*0.25, src.height - 20);
+  panels.push({
+    id: nextId++,
+    x: clamp(cx - w/2, 0, src.width - w),
+    y: clamp(cy - h/2, 0, src.height - h),
+    w, h, on: true
+  });
+  focusIdx = panels.length - 1; edited = true;
+  renumber(); render(); buildThumbs();
+  $('status').textContent = '枠を足しました。取っ手をドラッグして合わせてください。';
+}
+
 function deletePanel(i){
   if (i < 0 || !panels[i]) return;
+  pushHistory();
   panels.splice(i, 1);
   focusIdx = -1; edited = true;
   renumber(); render(); buildThumbs();
@@ -917,7 +963,7 @@ overlay.addEventListener('pointerdown', e => {
     const d = (focusIdx >= 0 && panels[focusIdx]) ? edgeAt(focusIdx, p) : null;
     if (d){
       try { overlay.setPointerCapture(e.pointerId); } catch {}
-      active = focusIdx; dir = d; mode = 'resize'; startPt = p; orig = {...panels[active]};
+      active = focusIdx; dir = d; mode = 'resize'; startPt = p; orig = {...panels[active]}; pendingSnap = snapshot();
       dbg('取っ手 ' + d); drawBoxes(); return;
     }
     mode = 'tap'; startPt = p; active = hit(p);   // それ以外はタップ扱い（ページのスクロールを邪魔しない）
@@ -928,14 +974,14 @@ overlay.addEventListener('pointerdown', e => {
   startPt = p;
   const grab = edgeAtAny(p);
   if (grab){                       // 取っ手をつかんだ → 伸ばす
-    active = focusIdx = grab.i; dir = grab.d; mode = 'resize'; orig = {...panels[active]};
+    active = focusIdx = grab.i; dir = grab.d; mode = 'resize'; orig = {...panels[active]}; pendingSnap = snapshot();
     drawBoxes(); return;
   }
   active = hit(p); dir = null;
   if (active >= 0){
-    focusIdx = active; mode = 'maybe-move'; orig = {...panels[active]}; drawBoxes();
+    focusIdx = active; mode = 'maybe-move'; orig = {...panels[active]}; pendingSnap = snapshot(); drawBoxes();
   } else {
-    focusIdx = -1; mode = 'new'; dragBox = {x:p.x, y:p.y, w:0, h:0};
+    focusIdx = -1; mode = 'new'; dragBox = {x:p.x, y:p.y, w:0, h:0}; pendingSnap = snapshot();
   }
 });
 overlay.addEventListener('pointermove', e => {
@@ -985,7 +1031,7 @@ overlay.addEventListener('pointerup', () => {
   }
   if (mode === 'tap'){
     if (active >= 0){ panels[active].on = !panels[active].on; focusIdx = active; }
-    mode = null; active = -1;
+    mode = null; active = -1; pendingSnap = null;
     render(); buildThumbs(); return;
   }
   if (mode === 'maybe-move' && active >= 0 && !editMode){
@@ -996,6 +1042,8 @@ overlay.addEventListener('pointerup', () => {
   }
   mode = null; dragBox = null; active = -1; dir = null;
   renumber();                      // 位置が変わったら読み順に並べ直す
+  if (pendingSnap && !same(pendingSnap, panels)) pushHistory(pendingSnap);   // 変わったときだけ履歴に残す
+  pendingSnap = null;
   render(); buildThumbs();
 });
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
@@ -1088,7 +1136,7 @@ function buildThumbs(){
     el.querySelector('.dl').addEventListener('click', () => {
       renderPanel(p).toBlob(b => saveBlob(b, nameOf(i)), mime(), 0.92);
     });
-    el.querySelector('.del').addEventListener('click', () => { panels.splice(i,1); if (focusIdx === i) focusIdx = -1; renumber(); render(); buildThumbs(); });
+    el.querySelector('.del').addEventListener('click', () => deletePanel(i));
     grid.appendChild(el);
   });
 }
@@ -1168,6 +1216,7 @@ $('maxside').addEventListener('change', buildThumbs);
 // 枠を検出しなおす（手で直したぶんは捨てる）
 $('btnRedetect').addEventListener('click', () => {
   if (edited && !confirm('手で直した枠を捨てて、はじめから検出しなおします。よろしいですか？')) return;
+  if (panels.length) pushHistory();
   panels = []; focusIdx = -1; edited = false;
   detect();
 });
@@ -1175,12 +1224,15 @@ $('btnRedetect').addEventListener('click', () => {
 $('btnNew').addEventListener('click', () => {
   if (!confirm('最初の画面に戻ります。よろしいですか？')) return;
   panels = []; src = null; img = null; focusIdx = -1; edited = false;
+  history = []; updateUndo();
   ws.hidden = true; $('actionbar').hidden = true;
   $('grid').innerHTML = ''; $('status').textContent = ''; $('imgInfo').textContent = ''; $('countInfo').textContent = '';
   fileInput.value = '';
   setEdit(false);
   window.scrollTo({top:0, behavior:'smooth'});
 });
+$('btnAdd').addEventListener('click', addPanel);
+$('btnUndo').addEventListener('click', undo);
 $('btnAllOn').addEventListener('click', () => { panels.forEach(p => p.on = true); render(); buildThumbs(); });
 $('btnAllOff').addEventListener('click', () => { panels.forEach(p => p.on = false); render(); buildThumbs(); });
 syncLabels();
@@ -1190,7 +1242,7 @@ const sp = new URLSearchParams(location.search).get('sample');
 if (sp) loadURL(sp);
 window.__app = { get panels(){ return panels; }, detect, renderPanel, detectBlobs, detectOnce };
 
-const VERSION = '2026-09-23e';
+const VERSION = '2026-09-23f';
 $('ver').textContent = VERSION;
 console.log('コマ割りカッター', VERSION);
 
