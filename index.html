@@ -137,13 +137,15 @@
           <button class="btn" id="btnAllOn">全部えらぶ</button>
           <button class="btn" id="btnAllOff">全部はずす</button>
           <button class="btn" id="btnEdit">枠をなおす</button>
+          <button class="btn" id="btnRedetect">枠をやり直す</button>
+          <button class="btn" id="btnNew">別の画像にする</button>
         </div>
         <div id="stage">
           <canvas id="view"></canvas>
           <canvas id="overlay"></canvas>
         </div>
-        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　何もない所をドラッグ＝コマを足す　・　枠の中をドラッグ＝移動　・　角をドラッグ＝サイズ変更</p>
-        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。枠の位置を直したいときは「枠をなおす」をオンに。</p>
+        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　<b>枠のふち（オレンジの取っ手）をドラッグ＝そのまま伸ばす</b>　・　枠の中をドラッグ＝移動　・　何もない所をドラッグ＝コマを足す</p>
+        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。<b>大きさを変えたいときは「枠をなおす」をオンにして、オレンジの取っ手をドラッグ</b>。</p>
       </div>
 
       <div class="card">
@@ -526,19 +528,42 @@ function drawBoxes(){
     octx.fillStyle = '#fff'; octx.font = 'bold 14px system-ui'; octx.textAlign='center'; octx.textBaseline='middle';
     octx.fillText(String(i+1), x+r+4, y+r+5);
   });
+  if (focusIdx >= 0 && panels[focusIdx]) drawHandles(focusIdx);
   if (dragBox){
     octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2; octx.setLineDash([5,4]);
     octx.strokeRect(dragBox.x, dragBox.y, dragBox.w, dragBox.h); octx.setLineDash([]);
   }
 }
 
+// つかんで伸ばせる取っ手（角4つ＋辺の真ん中4つ）
+function drawHandles(i){
+  const b = panels[i];
+  const x0 = b.x*scale, y0 = b.y*scale, x1 = (b.x+b.w)*scale, y1 = (b.y+b.h)*scale;
+  const mx = (x0+x1)/2, my = (y0+y1)/2;
+  const s = coarse ? 10 : 7;
+  octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2;
+  octx.strokeRect(x0, y0, x1-x0, y1-y0);
+  const draw = (cx, cy, w, h) => {
+    octx.beginPath(); octx.roundRect(cx-w, cy-h, w*2, h*2, 3);
+    octx.fillStyle = '#fff'; octx.fill();
+    octx.strokeStyle = '#e58b6f'; octx.lineWidth = 2; octx.stroke();
+  };
+  // 角
+  for (const [cx,cy] of [[x0,y0],[x1,y0],[x0,y1],[x1,y1]]) draw(cx, cy, s, s);
+  // 辺の真ん中（伸ばす方向に長い形にして、つかむ場所だとわかるように）
+  draw(mx, y0, s*1.8, s*0.8); draw(mx, y1, s*1.8, s*0.8);
+  draw(x0, my, s*0.8, s*1.8); draw(x1, my, s*0.8, s*1.8);
+}
+
 window.addEventListener('resize', () => { if (src) render(); });
 
 /* ---------- マウス操作 ---------- */
-let mode = null, active = -1, startPt = null, dragBox = null, orig = null, corner = null;
+let mode = null, active = -1, startPt = null, dragBox = null, orig = null, dir = null;
+let focusIdx = -1;      // いま取っ手を出しているコマ
+let edited = false;     // 手で直したかどうか（やり直すときの確認用）
 let editMode = false;
 const coarse = matchMedia('(pointer: coarse)').matches;
-const HANDLE = coarse ? 24 : 14;
+const TOL = coarse ? 22 : 12;   // 辺をつかめる太さ（画面px）
 
 function setEdit(on){
   editMode = on;
@@ -561,14 +586,33 @@ function hit(p){
   }
   return -1;
 }
-function cornerAt(i, p){
+// 枠のどこをつかんだか（'n' 上辺 / 's' 下辺 / 'e' 右辺 / 'w' 左辺 / 'nw' などは角）
+function edgeAt(i, p){
   const b = panels[i];
-  const cs = [['nw',b.x,b.y],['ne',b.x+b.w,b.y],['sw',b.x,b.y+b.h],['se',b.x+b.w,b.y+b.h]];
-  for (const [name,cx,cy] of cs){
-    if (Math.abs(p.x-cx*scale) < HANDLE && Math.abs(p.y-cy*scale) < HANDLE) return name;
-  }
-  return null;
+  const x0 = b.x*scale, y0 = b.y*scale, x1 = (b.x+b.w)*scale, y1 = (b.y+b.h)*scale;
+  if (p.x < x0-TOL || p.x > x1+TOL || p.y < y0-TOL || p.y > y1+TOL) return null;
+  const v = Math.abs(p.y-y0) <= TOL ? 'n' : (Math.abs(p.y-y1) <= TOL ? 's' : '');
+  const h = Math.abs(p.x-x0) <= TOL ? 'w' : (Math.abs(p.x-x1) <= TOL ? 'e' : '');
+  return (v+h) || null;
 }
+// 隣のコマとふちが重なっている場所では、どのコマの取っ手かを次の順で決める
+//   1. いま取っ手を出しているコマ　2. ポインタが内側に入っているコマ　3. 手前のコマ
+function edgeAtAny(p){
+  let best = null, bestScore = -1;
+  for (let i = 0; i < panels.length; i++){
+    const d = edgeAt(i, p);
+    if (!d) continue;
+    const b = panels[i];
+    const inside = p.x >= b.x*scale && p.x <= (b.x+b.w)*scale && p.y >= b.y*scale && p.y <= (b.y+b.h)*scale;
+    const score = (i === focusIdx ? 4 : 0) + (inside ? 2 : 0) + 1;
+    if (score >= bestScore){ bestScore = score; best = {i, d}; }
+  }
+  return best;
+}
+const cursorFor = d =>
+  (d === 'n' || d === 's') ? 'ns-resize' :
+  (d === 'e' || d === 'w') ? 'ew-resize' :
+  (d === 'nw' || d === 'se') ? 'nwse-resize' : 'nesw-resize';
 
 overlay.addEventListener('pointerdown', e => {
   const p = pt(e);
@@ -577,14 +621,18 @@ overlay.addEventListener('pointerdown', e => {
     mode = 'tap'; startPt = p; active = hit(p);
     return;
   }
-  overlay.setPointerCapture(e.pointerId);
-  startPt = p; active = hit(p);
+  try { overlay.setPointerCapture(e.pointerId); } catch {}
+  startPt = p;
+  const grab = edgeAtAny(p);
+  if (grab){                       // 取っ手をつかんだ → 伸ばす
+    active = focusIdx = grab.i; dir = grab.d; mode = 'resize'; orig = {...panels[active]};
+    drawBoxes(); return;
+  }
+  active = hit(p); dir = null;
   if (active >= 0){
-    corner = cornerAt(active, p);
-    mode = corner ? 'resize' : 'maybe-move';
-    orig = {...panels[active]};
+    focusIdx = active; mode = 'maybe-move'; orig = {...panels[active]}; drawBoxes();
   } else {
-    mode = 'new'; dragBox = {x:p.x, y:p.y, w:0, h:0};
+    focusIdx = -1; mode = 'new'; dragBox = {x:p.x, y:p.y, w:0, h:0};
   }
 });
 overlay.addEventListener('pointermove', e => {
@@ -594,8 +642,11 @@ overlay.addEventListener('pointermove', e => {
     return;
   }
   if (!mode){
+    const grab = edgeAtAny(p);
     const i = hit(p);
-    overlay.style.cursor = i < 0 ? 'crosshair' : (cornerAt(i,p) ? 'nwse-resize' : 'move');
+    const fi = grab ? grab.i : i;
+    if (fi !== focusIdx){ focusIdx = fi; drawBoxes(); }   // マウスを乗せたコマに取っ手を出す
+    overlay.style.cursor = grab ? cursorFor(grab.d) : (i < 0 ? 'crosshair' : 'move');
     return;
   }
   const dx = (p.x - startPt.x)/scale, dy = (p.y - startPt.y)/scale;
@@ -604,34 +655,37 @@ overlay.addEventListener('pointermove', e => {
     const b = panels[active];
     b.x = clamp(orig.x + dx, 0, src.width - b.w);
     b.y = clamp(orig.y + dy, 0, src.height - b.h);
-    drawBoxes();
+    edited = true; drawBoxes();
   } else if (mode === 'resize'){
     const b = panels[active];
     let x0 = orig.x, y0 = orig.y, x1 = orig.x+orig.w, y1 = orig.y+orig.h;
-    if (corner.includes('w')) x0 = orig.x + dx; else x1 = orig.x+orig.w + dx;
-    if (corner.includes('n')) y0 = orig.y + dy; else y1 = orig.y+orig.h + dy;
+    if (dir.includes('w')) x0 += dx;
+    if (dir.includes('e')) x1 += dx;
+    if (dir.includes('n')) y0 += dy;
+    if (dir.includes('s')) y1 += dy;
     b.x = clamp(Math.min(x0,x1), 0, src.width); b.y = clamp(Math.min(y0,y1), 0, src.height);
     b.w = clamp(Math.abs(x1-x0), 8, src.width-b.x); b.h = clamp(Math.abs(y1-y0), 8, src.height-b.y);
-    drawBoxes();
+    edited = true; drawBoxes();
   } else if (mode === 'new'){
     dragBox = {x:Math.min(startPt.x,p.x), y:Math.min(startPt.y,p.y), w:Math.abs(p.x-startPt.x), h:Math.abs(p.y-startPt.y)};
     drawBoxes();
   }
 });
-overlay.addEventListener('pointercancel', () => { mode = null; dragBox = null; active = -1; corner = null; drawBoxes(); });
+overlay.addEventListener('pointercancel', () => { mode = null; dragBox = null; active = -1; dir = null; drawBoxes(); });
 overlay.addEventListener('pointerup', () => {
   if (mode === 'tap'){
-    if (active >= 0) panels[active].on = !panels[active].on;
+    if (active >= 0){ panels[active].on = !panels[active].on; focusIdx = active; }
     mode = null; active = -1;
     render(); buildThumbs(); return;
   }
-  if (mode === 'maybe-move' && active >= 0){
-    panels[active].on = !panels[active].on;            // クリック＝選択トグル
+  if (mode === 'maybe-move' && active >= 0 && !editMode){
+    panels[active].on = !panels[active].on;            // クリック＝選択トグル（「枠をなおす」中は切り替えない）
   } else if (mode === 'new' && dragBox && dragBox.w > 12 && dragBox.h > 12){
     panels.push({x:dragBox.x/scale, y:dragBox.y/scale, w:dragBox.w/scale, h:dragBox.h/scale, on:true});
     sortPanels();
+    edited = true;
   }
-  mode = null; dragBox = null; active = -1; corner = null;
+  mode = null; dragBox = null; active = -1; dir = null;
   render(); buildThumbs();
 });
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
@@ -795,6 +849,22 @@ $('btnDetect').addEventListener('click', detect);
 ['aspect','bg','jpg','prefix'].forEach(id => $(id).addEventListener('change', buildThumbs));
 $('pad').addEventListener('input', () => { syncLabels(); clearTimeout(window._p); window._p = setTimeout(buildThumbs, 200); });
 $('maxside').addEventListener('change', buildThumbs);
+// 枠を検出しなおす（手で直したぶんは捨てる）
+$('btnRedetect').addEventListener('click', () => {
+  if (edited && !confirm('手で直した枠を捨てて、はじめから検出しなおします。よろしいですか？')) return;
+  panels = []; focusIdx = -1; edited = false;
+  detect();
+});
+// 最初の画面に戻る
+$('btnNew').addEventListener('click', () => {
+  if (!confirm('最初の画面に戻ります。よろしいですか？')) return;
+  panels = []; src = null; img = null; focusIdx = -1; edited = false;
+  ws.hidden = true; $('actionbar').hidden = true;
+  $('grid').innerHTML = ''; $('status').textContent = ''; $('imgInfo').textContent = ''; $('countInfo').textContent = '';
+  fileInput.value = '';
+  setEdit(false);
+  window.scrollTo({top:0, behavior:'smooth'});
+});
 $('btnAllOn').addEventListener('click', () => { panels.forEach(p => p.on = true); render(); buildThumbs(); });
 $('btnAllOff').addEventListener('click', () => { panels.forEach(p => p.on = false); render(); buildThumbs(); });
 syncLabels();
