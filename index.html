@@ -144,8 +144,8 @@
           <canvas id="view"></canvas>
           <canvas id="overlay"></canvas>
         </div>
-        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　<b>枠のふち（オレンジの取っ手）をドラッグ＝そのまま伸ばす</b>　・　枠の中をドラッグ＝移動　・　何もない所をドラッグ＝コマを足す</p>
-        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。<b>大きさを変えたいときは「枠をなおす」をオンにして、オレンジの取っ手をドラッグ</b>。</p>
+        <p class="hint" id="hintPC">コマをクリック＝選ぶ/はずす　・　<b>枠のふち（オレンジの取っ手）をドラッグ＝そのまま伸ばす</b>　・　枠の中をドラッグ＝移動　・　何もない所をドラッグ＝コマを足す　・　<b>赤い✕ボタン（または Delete キー）＝そのコマを消す</b></p>
+        <p class="hint" id="hintSP" hidden>コマをタップ＝選ぶ/はずす。<b>大きさを変えたいときは「枠をなおす」をオンにして、オレンジの取っ手をドラッグ</b>。いらないコマは<b>赤い✕</b>で消せます。</p>
       </div>
 
       <div class="card">
@@ -421,6 +421,105 @@ function detectBlobs(thr, minSize, region){
   return keep;
 }
 
+/* 誤って切ってしまったコマをつなぎ直す
+   コマの境目には必ず「枠線（濃い直線）」があるはず。
+   ぴったり並んでいて、境目に枠線が無いペアは、もともと1コマだったとみなして合体する。 */
+let dinteg = null;
+function buildDark(){
+  const d = src.getContext('2d', {willReadFrequently:true}).getImageData(0,0,iw,ih).data;
+  dinteg = new Int32Array((iw+1)*(ih+1));
+  for (let y = 0; y < ih; y++){
+    let rowsum = 0;
+    const o = y*iw, o1 = (y+1)*(iw+1), o0 = y*(iw+1);
+    for (let x = 0; x < iw; x++){
+      const p = (o+x)*4, a = d[p+3];
+      const lum = a < 24 ? 255 : (0.299*d[p] + 0.587*d[p+1] + 0.114*d[p+2]);
+      rowsum += lum < 140 ? 1 : 0;
+      dinteg[o1 + x + 1] = dinteg[o0 + x + 1] + rowsum;
+    }
+  }
+}
+const darkCount = (x0,y0,x1,y1) => {
+  const W = iw+1;
+  return dinteg[y1*W+x1] - dinteg[y0*W+x1] - dinteg[y1*W+x0] + dinteg[y0*W+x0];
+};
+// 横の枠線があるか。吹き出しの輪郭と区別するため「両はしまで届いている線」だけを枠線とみなす
+function hasHLine(x0, x1, y, tol, frac){
+  const w = x1-x0; if (w <= 0) return false;
+  const end = Math.max(3, Math.round(w*0.08));
+  for (let yy = Math.max(0, y-tol); yy < Math.min(ih, y+tol+1); yy++){
+    if (darkCount(x0, yy, x1, yy+1) < w*frac) continue;
+    if (darkCount(x0, yy, x0+end, yy+1) < end*0.7) continue;   // 左はし
+    if (darkCount(x1-end, yy, x1, yy+1) < end*0.7) continue;   // 右はし
+    return true;
+  }
+  return false;
+}
+function hasVLine(y0, y1, x, tol, frac){
+  const h = y1-y0; if (h <= 0) return false;
+  const end = Math.max(3, Math.round(h*0.08));
+  for (let xx = Math.max(0, x-tol); xx < Math.min(iw, x+tol+1); xx++){
+    if (darkCount(xx, y0, xx+1, y1) < h*frac) continue;
+    if (darkCount(xx, y0, xx+1, y0+end) < end*0.7) continue;   // 上はし
+    if (darkCount(xx, y1-end, xx+1, y1) < end*0.7) continue;   // 下はし
+    return true;
+  }
+  return false;
+}
+function mergeFalseCuts(boxes){
+  const short = Math.min(iw, ih);
+  const gapSmall = Math.max(3, Math.round(short*0.02));   // これくらい近ければ、それだけで怪しい
+  const gapMax   = Math.max(6, Math.round(short*0.12));   // これ以上離れていたら別のコマ
+  const alignTol = Math.max(3, Math.round(short*0.02));   // 端がこれくらい揃っていれば「並んでいる」
+  const lineTol  = Math.max(2, Math.round(short*0.012));  // 枠線を探す幅
+  const FRAC = 0.55;                                      // 境目の枠線とみなす濃さの割合
+  const THRU = 0.8;                                       // 「上下（左右）を貫く外枠」とみなす割合
+
+  const merged = (a,b) => ({x0:Math.min(a.x0,b.x0), y0:Math.min(a.y0,b.y0),
+                            x1:Math.max(a.x1,b.x1), y1:Math.max(a.y1,b.y1)});
+  let changed = true, guard = 0;
+  while (changed && guard++ < 10){
+    changed = false;
+    for (let i = 0; i < boxes.length && !changed; i++){
+      for (let j = i+1; j < boxes.length && !changed; j++){
+        const a = boxes[i], b = boxes[j];
+
+        // --- 上下に並んでいる ---
+        if (Math.abs(a.x0-b.x0) <= alignTol && Math.abs(a.x1-b.x1) <= alignTol){
+          const u = a.y0 <= b.y0 ? a : b, l = a.y0 <= b.y0 ? b : a;
+          const gap = l.y0 - u.y1;
+          if (gap <= gapMax){
+            const x0 = Math.max(u.x0,l.x0), x1 = Math.min(u.x1,l.x1);
+            const cut = hasHLine(x0,x1,u.y1,lineTol,FRAC) || hasHLine(x0,x1,l.y0,lineTol,FRAC);
+            // 左右どちらかの外枠が、2つを貫いて1本で通っているか＝同じコマの中
+            const sameFrame = hasVLine(u.y0, l.y1, u.x0+2, lineTol, THRU) ||
+                              hasVLine(u.y0, l.y1, u.x1-2, lineTol, THRU);
+            if (!cut && (gap <= gapSmall || sameFrame)){
+              boxes[i] = merged(a,b); boxes.splice(j,1); changed = true; break;
+            }
+          }
+        }
+
+        // --- 左右に並んでいる ---
+        if (!changed && Math.abs(a.y0-b.y0) <= alignTol && Math.abs(a.y1-b.y1) <= alignTol){
+          const le = a.x0 <= b.x0 ? a : b, ri = a.x0 <= b.x0 ? b : a;
+          const gap = ri.x0 - le.x1;
+          if (gap <= gapMax){
+            const y0 = Math.max(le.y0,ri.y0), y1 = Math.min(le.y1,ri.y1);
+            const cut = hasVLine(y0,y1,le.x1,lineTol,FRAC) || hasVLine(y0,y1,ri.x0,lineTol,FRAC);
+            const sameFrame = hasHLine(le.x0, ri.x1, le.y0+2, lineTol, THRU) ||
+                              hasHLine(le.x0, ri.x1, le.y1-2, lineTol, THRU);
+            if (!cut && (gap <= gapSmall || sameFrame)){
+              boxes[i] = merged(a,b); boxes.splice(j,1); changed = true; break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return boxes;
+}
+
 // つながり検出の結果が「コマ割りとして妥当か」をざっくり判定する
 function blobsPlausible(boxes){
   if (boxes.length < 2 || boxes.length > 30) return false;
@@ -478,6 +577,12 @@ function detect(){
       if (r.length > 1){ out = r; note = '（すきまが細いので自動でゆるめました）'; break; }
     }
   }
+
+  // 枠線のない所で切ってしまったコマをつなぎ直す
+  buildDark();
+  const beforeMerge = out.length;
+  out = mergeFalseCuts(out);
+  if (out.length < beforeMerge && !note) note = '（枠線のない切れ目をつなぎ直しました）';
 
   const prevOn = new Map(panels.map(p => [p.x+','+p.y, p.on]));
   panels = out.map(r => ({
@@ -554,9 +659,28 @@ function drawHandles(i){
   // 辺の真ん中（伸ばす方向に長い形にして、つかむ場所だとわかるように）
   draw(mx, y0, s*1.8, s*0.8); draw(mx, y1, s*1.8, s*0.8);
   draw(x0, my, s*0.8, s*1.8); draw(x1, my, s*0.8, s*1.8);
+
+  // このコマを消すボタン
+  const d = delBadge(i);
+  octx.beginPath(); octx.arc(d.cx, d.cy, d.r, 0, Math.PI*2);
+  octx.fillStyle = '#d2543a'; octx.fill();
+  octx.strokeStyle = '#fff'; octx.lineWidth = 2; octx.stroke();
+  octx.strokeStyle = '#fff'; octx.lineWidth = 2.4; const k = d.r*0.42;
+  octx.beginPath();
+  octx.moveTo(d.cx-k, d.cy-k); octx.lineTo(d.cx+k, d.cy+k);
+  octx.moveTo(d.cx+k, d.cy-k); octx.lineTo(d.cx-k, d.cy+k);
+  octx.stroke();
 }
 
 window.addEventListener('resize', () => { if (src) render(); });
+
+// Delete / Backspace で、取っ手を出しているコマを消す
+window.addEventListener('keydown', e => {
+  if (!src || focusIdx < 0) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+  if (e.key === 'Delete' || e.key === 'Backspace'){ e.preventDefault(); deletePanel(focusIdx); }
+});
 
 /* ---------- マウス操作 ---------- */
 let mode = null, active = -1, startPt = null, dragBox = null, orig = null, dir = null;
@@ -580,13 +704,33 @@ function pt(e){
   const r = overlay.getBoundingClientRect();
   return {x: e.clientX - r.left, y: e.clientY - r.top};
 }
+// 重なっているときは「いちばん小さいコマ」を拾う
+// （大きく伸ばした枠の下に隠れた小さい枠も、つかんで消せるように）
 function hit(p){
-  for (let i = panels.length-1; i >= 0; i--){
+  let found = -1, small = Infinity;
+  for (let i = 0; i < panels.length; i++){
     const b = panels[i];
     const x = b.x*scale, y = b.y*scale, w = b.w*scale, h = b.h*scale;
-    if (p.x >= x && p.x <= x+w && p.y >= y && p.y <= y+h) return i;
+    if (p.x >= x && p.x <= x+w && p.y >= y && p.y <= y+h && w*h < small){ small = w*h; found = i; }
   }
-  return -1;
+  return found;
+}
+// 取っ手を出しているコマに付く「✕」の位置（番号バッジの右どなり）
+function delBadge(i){
+  const b = panels[i];
+  const r = coarse ? 19 : 15;
+  return {cx: b.x*scale + (coarse?30:26) + r*2, cy: b.y*scale + r + 4, r};
+}
+function onDelBadge(p){
+  if (focusIdx < 0 || !panels[focusIdx]) return false;
+  const d = delBadge(focusIdx);
+  return Math.hypot(p.x-d.cx, p.y-d.cy) <= d.r + (coarse ? 8 : 4);
+}
+function deletePanel(i){
+  if (i < 0 || !panels[i]) return;
+  panels.splice(i, 1);
+  focusIdx = -1; edited = true;
+  renumber(); render(); buildThumbs();
 }
 // 枠のどこをつかんだか（'n' 上辺 / 's' 下辺 / 'e' 右辺 / 'w' 左辺 / 'nw' などは角）
 function edgeAt(i, p){
@@ -618,6 +762,11 @@ const cursorFor = d =>
 
 overlay.addEventListener('pointerdown', e => {
   const p = pt(e);
+  if (onDelBadge(p)){          // ✕ を押した
+    mode = 'del'; startPt = p;
+    try { overlay.setPointerCapture(e.pointerId); } catch {}
+    return;
+  }
   // 指で「えらぶ」モードのときは、タップだけ拾ってスクロールは邪魔しない
   if (e.pointerType !== 'mouse' && !editMode){
     mode = 'tap'; startPt = p; active = hit(p);
@@ -639,11 +788,13 @@ overlay.addEventListener('pointerdown', e => {
 });
 overlay.addEventListener('pointermove', e => {
   const p = pt(e);
+  if (mode === 'del') return;
   if (mode === 'tap'){
     if (Math.hypot(p.x-startPt.x, p.y-startPt.y) > 12) { mode = null; active = -1; }  // スクロール扱い
     return;
   }
   if (!mode){
+    if (onDelBadge(p)){ overlay.style.cursor = 'pointer'; return; }
     const grab = edgeAtAny(p);
     const i = hit(p);
     const fi = grab ? grab.i : i;
@@ -675,6 +826,11 @@ overlay.addEventListener('pointermove', e => {
 });
 overlay.addEventListener('pointercancel', () => { mode = null; dragBox = null; active = -1; dir = null; drawBoxes(); });
 overlay.addEventListener('pointerup', () => {
+  if (mode === 'del'){
+    mode = null;
+    deletePanel(focusIdx);
+    return;
+  }
   if (mode === 'tap'){
     if (active >= 0){ panels[active].on = !panels[active].on; focusIdx = active; }
     mode = null; active = -1;
