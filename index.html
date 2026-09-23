@@ -432,6 +432,7 @@ function detectBlobs(thr, minSize, region){
    ぴったり並んでいて、境目に枠線が無いペアは、もともと1コマだったとみなして合体する。 */
 let dinteg = null;
 function buildDark(){
+  iw = src.width; ih = src.height;            // ほかの検出より先に走ることがあるので自分で用意する
   const d = src.getContext('2d', {willReadFrequently:true}).getImageData(0,0,iw,ih).data;
   dinteg = new Int32Array((iw+1)*(ih+1));
   for (let y = 0; y < ih; y++){
@@ -472,6 +473,18 @@ function hasVLine(y0, y1, x, tol, frac){
   }
   return false;
 }
+// この四角は、ぐるりと枠線に囲まれた1コマか（3辺以上あれば枠とみなす）
+function isFramed(b){
+  const tol = Math.max(2, Math.round(Math.min(iw,ih)*0.012));
+  const F = 0.8;
+  let n = 0;
+  if (hasHLine(b.x0, b.x1, b.y0,   tol, F)) n++;
+  if (hasHLine(b.x0, b.x1, b.y1-1, tol, F)) n++;
+  if (hasVLine(b.y0, b.y1, b.x0,   tol, F)) n++;
+  if (hasVLine(b.y0, b.y1, b.x1-1, tol, F)) n++;
+  return n >= 3;
+}
+
 function mergeFalseCuts(boxes){
   const short = Math.min(iw, ih);
   const gapSmall = Math.max(3, Math.round(short*0.02));   // これくらい近ければ、それだけで怪しい
@@ -506,6 +519,16 @@ function mergeFalseCuts(boxes){
           }
         }
 
+        // --- 合体すると枠に囲まれた1コマになる（並びは問わない）---
+        if (!changed && !isFramed(a) && !isFramed(b)){
+          const m = merged(a,b);
+          const area = (m.x1-m.x0)*(m.y1-m.y0);
+          const sum = (a.x1-a.x0)*(a.y1-a.y0) + (b.x1-b.x0)*(b.y1-b.y0);
+          if (sum >= area*0.55 && isFramed(m)){
+            boxes[i] = m; boxes.splice(j,1); changed = true; break;
+          }
+        }
+
         // --- 左右に並んでいる ---
         if (!changed && Math.abs(a.y0-b.y0) <= alignTol && Math.abs(a.y1-b.y1) <= alignTol){
           const le = a.x0 <= b.x0 ? a : b, ri = a.x0 <= b.x0 ? b : a;
@@ -527,6 +550,74 @@ function mergeFalseCuts(boxes){
 }
 
 // つながり検出の結果が「コマ割りとして妥当か」をざっくり判定する
+// つながり検出の結果が「コマ割りとして妥当か」をざっくり判定する
+/* 枠線そのものを探してコマを取る（いちばん枠に忠実）
+   コマの枠は「閉じた長方形の線」なので、濃い画素だけを見ると
+   1本につながった輪になる。その輪の外接四角がそのままコマ。 */
+function detectFrames(darkThr, minSize){
+  iw = src.width; ih = src.height;            // ほかの検出より先に走るので自分で用意する
+  const W = iw, H = ih;
+  const d = src.getContext('2d', {willReadFrequently:true}).getImageData(0,0,W,H).data;
+  const dm = new Uint8Array(W*H);
+  for (let i = 0, p = 0; i < dm.length; i++, p += 4){
+    const a = d[p+3];
+    const lum = a < 24 ? 255 : (0.299*d[p] + 0.587*d[p+1] + 0.114*d[p+2]);
+    dm[i] = lum < darkThr ? 1 : 0;
+  }
+  const seen = new Uint8Array(W*H), stack = new Int32Array(W*H);
+  const boxes = [];
+  for (let s0 = 0; s0 < W*H; s0++){
+    if (!dm[s0] || seen[s0]) continue;
+    let sp = 0; stack[sp++] = s0; seen[s0] = 1;
+    let x0 = s0%W, x1 = x0, y0 = (s0/W)|0, y1 = y0, n = 0;
+    while (sp){
+      const i = stack[--sp]; n++;
+      const x = i%W, y = (i/W)|0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0   && dm[i-1] && !seen[i-1]){ seen[i-1] = 1; stack[sp++] = i-1; }
+      if (x < W-1 && dm[i+1] && !seen[i+1]){ seen[i+1] = 1; stack[sp++] = i+1; }
+      if (y > 0   && dm[i-W] && !seen[i-W]){ seen[i-W] = 1; stack[sp++] = i-W; }
+      if (y < H-1 && dm[i+W] && !seen[i+W]){ seen[i+W] = 1; stack[sp++] = i+W; }
+    }
+    const bw = x1-x0+1, bh = y1-y0+1;
+    if (bw < minSize || bh < minSize) continue;
+    if (n > bw*bh*0.55) continue;                 // 塗りつぶしの塊は枠ではない
+    // 外接四角の四辺すべてに画素がある＝ぐるりと囲む輪になっている
+    let top=0, bot=0, lef=0, rig=0;
+    for (let x = x0; x <= x1; x++){
+      if (dm[y0*W+x] && seen[y0*W+x]) top = 1;
+      if (dm[y1*W+x] && seen[y1*W+x]) bot = 1;
+    }
+    for (let y = y0; y <= y1; y++){
+      if (dm[y*W+x0] && seen[y*W+x0]) lef = 1;
+      if (dm[y*W+x1] && seen[y*W+x1]) rig = 1;
+    }
+    if (!(top && bot && lef && rig)) continue;
+    boxes.push({x0, y0, x1:x1+1, y1:y1+1});
+  }
+  // 他の枠を2つ以上抱えている大枠（ページ全体の囲みなど）は捨てる
+  const inside = (a,b) => a.x0 >= b.x0-2 && a.y0 >= b.y0-2 && a.x1 <= b.x1+2 && a.y1 <= b.y1+2;
+  return boxes.filter(b => boxes.filter(o => o !== b && inside(o,b)).length < 2);
+}
+
+// 枠として使ってよさそうか（ページをそれなりに埋めていて、重なっていない）
+function framesPlausible(boxes){
+  if (boxes.length < 2 || boxes.length > 30) return false;
+  let area = 0;
+  for (let i = 0; i < boxes.length; i++){
+    const a = boxes[i];
+    area += (a.x1-a.x0)*(a.y1-a.y0);
+    for (let j = i+1; j < boxes.length; j++){
+      const b = boxes[j];
+      const ox = Math.max(0, Math.min(a.x1,b.x1)-Math.max(a.x0,b.x0));
+      const oy = Math.max(0, Math.min(a.y1,b.y1)-Math.max(a.y0,b.y0));
+      if (ox*oy > Math.min((a.x1-a.x0)*(a.y1-a.y0), (b.x1-b.x0)*(b.y1-b.y0))*0.2) return false;
+    }
+  }
+  return area >= iw*ih*0.45;
+}
+
 function blobsPlausible(boxes){
   if (boxes.length < 2 || boxes.length > 30) return false;
   const total = boxes.reduce((s,b) => s + (b.x1-b.x0)*(b.y1-b.y0), 0);
@@ -548,46 +639,63 @@ function detect(){
   const minGap = Math.max(1, Math.round(short * (+$('gap').value) / 1000));
   const minSize = Math.max(8, Math.round(short * (+$('minsz').value) / 100));
 
-  let out = detectOnce(thr, minGap, minSize, 0.02);
   let note = '';
+  buildDark();                       // 枠線を調べる材料を先に用意する
 
-  // すきま方式でコマを取りこぼしていそうなら、枠線のつながり方式も試して多いほうを採る
+  let out = detectOnce(thr, minGap, minSize, 0.02);
+
+  // すきま方式とつながり方式を比べて、ページをよく覆えているほうを採る
+  // （枠の中が明るい漫画では、すきま方式が枠を突き抜けて小さく切ってしまうため）
+  const area = bs => bs.reduce((s,b) => s + (b.x1-b.x0)*(b.y1-b.y0), 0) / (iw*ih);
   const blobs = detectBlobs(thr, minSize);
-  if (blobsPlausible(blobs) && blobs.length > out.length){
-    out = blobs;
-    note = '（枠線のつながりで検出）';
-  }
-
-  // くっついたまま残ったコマは、その中だけを枠線のつながりで見直す
-  const refined = [];
-  for (const r of out){
-    const area = (r.x1-r.x0)*(r.y1-r.y0);
-    const sub = detectBlobs(thr, minSize, r);
-    const cover = sub.reduce((s,b) => s + (b.x1-b.x0)*(b.y1-b.y0), 0);
-    if (sub.length > 1 && sub.length <= 6 && cover >= area*0.6){
-      refined.push(...sub);
-      if (!note) note = '（枠線のつながりで細かく検出）';
-    } else refined.push(r);
-  }
-  out = refined;
-  // 1コマのまま＝すきまが細い／うすい漫画。すこしずつ条件をゆるめて探し直す
-  if (out.length < 2){
-    const tries = [
-      [thr, Math.max(2, Math.round(minGap*0.5)), 0.02],
-      [thr, 2, 0.035],
-      [246, 3, 0.03],
-      [250, 2, 0.05],
-    ];
-    for (const [t, g, tf] of tries){
-      const r = detectOnce(t, g, minSize, tf);
-      if (r.length > 1){ out = r; note = '（すきまが細いので自動でゆるめました）'; break; }
+  if (blobsPlausible(blobs)){
+    const cx = area(out), cb = area(blobs);
+    if (cb > cx*1.15 || (blobs.length > out.length && cb >= cx*0.95)){
+      out = blobs; note = '（枠線のつながりで検出）';
     }
   }
 
-  // 枠線のない所で切ってしまったコマをつなぎ直す
-  buildDark();
-  const beforeMerge = out.length;
-  out = mergeFalseCuts(out);
+    // くっついたまま残ったコマは、その中だけをつながり方式で見直す
+    // ただし枠にぐるりと囲まれているコマは、1コマと決まっているので割らない
+    const refined = [];
+    for (const r of out){
+      if (isFramed(r)){ refined.push(r); continue; }
+      const area = (r.x1-r.x0)*(r.y1-r.y0);
+      const sub = detectBlobs(thr, minSize, r);
+      const cover = sub.reduce((s,b) => s + (b.x1-b.x0)*(b.y1-b.y0), 0);
+      if (sub.length > 1 && sub.length <= 6 && cover >= area*0.6){
+        refined.push(...sub);
+        if (!note) note = '（枠線のつながりで細かく検出）';
+      } else refined.push(r);
+    }
+    out = refined;
+
+    // 1コマのまま＝すきまが細い／うすい漫画。すこしずつ条件をゆるめて探し直す
+    if (out.length < 2){
+      const tries = [
+        [thr, Math.max(2, Math.round(minGap*0.5)), 0.02],
+        [thr, 2, 0.035],
+        [246, 3, 0.03],
+        [250, 2, 0.05],
+      ];
+      for (const [t, g, tf] of tries){
+        const r = detectOnce(t, g, minSize, tf);
+        if (r.length > 1){ out = r; note = '（すきまが細いので自動でゆるめました）'; break; }
+      }
+    }
+
+    // 枠線のない所で切ってしまったコマをつなぎ直す
+    const beforeMerge = out.length;
+    out = mergeFalseCuts(out);
+
+    // ほかのコマにすっぽり入っている小さな四角は捨てる（コマの中の絵や吹き出し）
+    out = out.filter((b,i) => !out.some((o,k) => {
+      if (k === i) return false;
+      const ox = Math.max(0, Math.min(b.x1,o.x1)-Math.max(b.x0,o.x0));
+      const oy = Math.max(0, Math.min(b.y1,o.y1)-Math.max(b.y0,o.y0));
+      const ab = (b.x1-b.x0)*(b.y1-b.y0), ao = (o.x1-o.x0)*(o.y1-o.y0);
+      return ao > ab && ox*oy > ab*0.8;
+    }));
   if (out.length < beforeMerge && !note) note = '（枠線のない切れ目をつなぎ直しました）';
 
   const prevOn = new Map(panels.map(p => [p.x+','+p.y, p.on]));
@@ -1055,7 +1163,7 @@ const sp = new URLSearchParams(location.search).get('sample');
 if (sp) loadURL(sp);
 window.__app = { get panels(){ return panels; }, detect, renderPanel, detectBlobs, detectOnce };
 
-const VERSION = '2026-09-23c';
+const VERSION = '2026-09-23d';
 $('ver').textContent = VERSION;
 console.log('コマ割りカッター', VERSION);
 
